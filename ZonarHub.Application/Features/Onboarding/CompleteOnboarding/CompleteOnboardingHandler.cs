@@ -16,6 +16,7 @@ public sealed class CompleteOnboardingHandler
     : IRequestHandler<CompleteOnboardingCommand, Result<CompleteOnboardingResponse>>
 {
     private readonly IUserRepository _users;
+    private readonly IUserOrganizationAssignmentRepository _assignments;
     private readonly IOrganizationRepository _organizations;
     private readonly ISystemSettingRepository _settings;
     private readonly IComplexRepository _complexes;
@@ -29,6 +30,7 @@ public sealed class CompleteOnboardingHandler
 
     public CompleteOnboardingHandler(
         IUserRepository users,
+        IUserOrganizationAssignmentRepository assignments,
         IOrganizationRepository organizations,
         ISystemSettingRepository settings,
         IComplexRepository complexes,
@@ -41,6 +43,7 @@ public sealed class CompleteOnboardingHandler
         IClock clock)
     {
         _users = users;
+        _assignments = assignments;
         _organizations = organizations;
         _settings = settings;
         _complexes = complexes;
@@ -77,6 +80,8 @@ public sealed class CompleteOnboardingHandler
             var existingOrg = await _organizations.GetByIdAsync(new OrganizationId(existingOrganizationId), cancellationToken);
             if (existingOrg is not null && existingOrg.TenantId == request.TenantId)
             {
+                await _assignments.SetOrganizationIdsAsync(user.Id.Value, [existingOrg.Id.Value], cancellationToken);
+
                 return Result.Success(new CompleteOnboardingResponse(
                     existingOrg.Id.Value,
                     ComplexId: null,
@@ -100,6 +105,7 @@ public sealed class CompleteOnboardingHandler
             }
 
             _users.Update(user);
+            await _assignments.SetOrganizationIdsAsync(user.Id.Value, [existingByName.Id.Value], cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return Result.Success(new CompleteOnboardingResponse(
@@ -234,6 +240,7 @@ public sealed class CompleteOnboardingHandler
         }
 
         _users.Update(user);
+        await _assignments.SetOrganizationIdsAsync(user.Id.Value, [org.Id.Value], cancellationToken);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 

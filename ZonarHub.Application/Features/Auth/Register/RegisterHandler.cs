@@ -144,7 +144,7 @@ public sealed class RegisterHandler : IRequestHandler<RegisterCommand, Result<Au
                 user.BirthDate?.ToString("yyyy-MM-dd"),
                 user.AvatarUrl,
                 user.TenantId?.ToString(),
-                user.TenantId.HasValue ? [user.TenantId.Value.ToString()] : null,
+                null,
                 null, null, null),
             new AuthTenantDto(
                 tenant.Id.Value.ToString(),

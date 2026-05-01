@@ -23,12 +23,18 @@ internal static class AuthInfrastructureExtensions
         services.AddOptions<EmailOptions>()
             .Bind(configuration.GetSection(EmailOptions.SectionName));
 
+        services.AddSingleton<ISmtpClientAdapterFactory, MailKitSmtpClientAdapterFactory>();
+
         services.AddScoped<IEmailService>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<EmailOptions>>().Value;
-            if (opts.Provider.Equals("Smtp", StringComparison.OrdinalIgnoreCase))
-                return ActivatorUtilities.CreateInstance<SmtpEmailService>(sp);
-            return ActivatorUtilities.CreateInstance<InMemoryEmailService>(sp);
+            if (!opts.Provider.Equals("Smtp", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Unsupported email provider: '{opts.Provider}'. Supported provider: Smtp.");
+            }
+
+            return ActivatorUtilities.CreateInstance<SmtpEmailService>(sp);
         });
 
         services.AddScoped<IEmailTemplateComposer, EmailTemplateComposer>();

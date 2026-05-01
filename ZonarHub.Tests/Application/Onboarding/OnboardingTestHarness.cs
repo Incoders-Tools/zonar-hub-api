@@ -14,6 +14,7 @@ internal sealed class OnboardingTestHarness
         UnitOfWork = new InMemoryUnitOfWork();
 
         UserRepository = new InMemoryUserRepository(new InMemoryUserStore());
+        UserOrganizationAssignmentRepository = new InMemoryUserOrganizationAssignmentRepository(new InMemoryUserOrganizationAssignmentStore());
         OrganizationRepository = new InMemoryOrganizationRepository(new InMemoryOrganizationStore());
         SystemSettingRepository = new InMemorySystemSettingRepository(new InMemorySystemSettingStore());
         ComplexRepository = new InMemoryComplexRepository(new InMemoryComplexStore());
@@ -25,6 +26,7 @@ internal sealed class OnboardingTestHarness
 
         CompleteOnboarding = new CompleteOnboardingHandler(
             UserRepository,
+            UserOrganizationAssignmentRepository,
             OrganizationRepository,
             SystemSettingRepository,
             ComplexRepository,
@@ -43,6 +45,7 @@ internal sealed class OnboardingTestHarness
     public IUnitOfWork UnitOfWork { get; }
 
     public InMemoryUserRepository UserRepository { get; }
+    public InMemoryUserOrganizationAssignmentRepository UserOrganizationAssignmentRepository { get; }
     public InMemoryOrganizationRepository OrganizationRepository { get; }
     public InMemorySystemSettingRepository SystemSettingRepository { get; }
     public InMemoryComplexRepository ComplexRepository { get; }

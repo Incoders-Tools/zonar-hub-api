@@ -1,17 +1,17 @@
 using System.Collections.Concurrent;
 using ZonarHub.Application.Abstractions;
 
-namespace ZonarHub.Infrastructure.Caching.InMemory;
+namespace ZonarHub.Infrastructure.Caching;
 
 /// <summary>
-/// Process-local cache implementation. Suitable for development and tests.
+/// Process-local cache implementation.
 /// </summary>
-public sealed class InMemoryCacheStore : ICacheStore
+public sealed class MemoryCacheStore : ICacheStore
 {
     private readonly ConcurrentDictionary<string, CacheEntry> _entries = new();
     private readonly TimeProvider _timeProvider;
 
-    public InMemoryCacheStore(TimeProvider timeProvider)
+    public MemoryCacheStore(TimeProvider timeProvider)
     {
         _timeProvider = timeProvider;
     }

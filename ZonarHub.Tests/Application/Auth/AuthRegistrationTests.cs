@@ -3,7 +3,7 @@ using ZonarHub.Application.Features.Auth.CheckCode;
 using ZonarHub.Application.Features.Auth.Register;
 using ZonarHub.Domain.Users;
 using ZonarHub.Infrastructure.Auth;
-using ZonarHub.Infrastructure.Caching.InMemory;
+using ZonarHub.Infrastructure.Caching;
 using ZonarHub.Infrastructure.Persistence.InMemory;
 using ZonarHub.Tests.Common;
 
@@ -30,6 +30,8 @@ public sealed class AuthRegistrationTests
 
         Assert.True(result.IsSuccess);
         Assert.Equal("nm@gmail.com", result.Value.User.Email);
+        Assert.Null(result.Value.User.TenantIds);
+        Assert.Null(result.Value.User.OrganizationId);
 
         var persisted = await h.Users.GetByEmailAsync("nm@gmail.com", CancellationToken.None);
         Assert.NotNull(persisted);
@@ -70,7 +72,7 @@ public sealed class AuthRegistrationTests
     [Fact]
     public async Task CheckCode_MasterBypass_IsAlwaysValid()
     {
-        var cache = new InMemoryCacheStore(TimeProvider.System);
+        var cache = new MemoryCacheStore(TimeProvider.System);
         var handler = new CheckVerificationCodeHandler(cache);
 
         var result = await handler.Handle(
@@ -84,7 +86,7 @@ public sealed class AuthRegistrationTests
     [Fact]
     public async Task CheckCode_WithStoredCode_ValidatesAgainstCache()
     {
-        var cache = new InMemoryCacheStore(TimeProvider.System);
+        var cache = new MemoryCacheStore(TimeProvider.System);
         const string email = "cache@test.com";
         await cache.SetAsync($"verify:{email}", "123456", TimeSpan.FromMinutes(15));
 
@@ -107,7 +109,7 @@ public sealed class AuthRegistrationTests
             var tenants = new InMemoryTenantRepository(new InMemoryTenantStore());
             var hasher = new PasswordHasher();
             var jwt = new StubJwtTokenService(nowUtc.AddMinutes(30));
-            var cache = new InMemoryCacheStore(TimeProvider.System);
+            var cache = new MemoryCacheStore(TimeProvider.System);
             var email = new NoopEmailService();
             var templates = new StubEmailTemplateComposer();
             var uow = new InMemoryUnitOfWork();

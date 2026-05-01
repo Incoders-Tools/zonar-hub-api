@@ -12,7 +12,7 @@ public sealed class PersistenceOptions
 
     /// <summary>
     /// The persistence provider to activate.
-    /// Supported values: <c>InMemory</c>, <c>Supabase</c>.
+    /// Supported value: <c>Supabase</c>.
     /// </summary>
-    public string Provider { get; init; } = "InMemory";
+    public string Provider { get; init; } = "Supabase";
 }

@@ -9,6 +9,7 @@ namespace ZonarHub.Application.Features.Auth.Login;
 public sealed class LoginHandler : IRequestHandler<LoginCommand, Result<AuthResponse>>
 {
     private readonly IUserRepository _users;
+    private readonly IUserOrganizationAssignmentRepository _assignments;
     private readonly ITenantRepository _tenants;
     private readonly IPasswordHasher _hasher;
     private readonly IJwtTokenService _jwt;
@@ -17,6 +18,7 @@ public sealed class LoginHandler : IRequestHandler<LoginCommand, Result<AuthResp
 
     public LoginHandler(
         IUserRepository users,
+        IUserOrganizationAssignmentRepository assignments,
         ITenantRepository tenants,
         IPasswordHasher hasher,
         IJwtTokenService jwt,
@@ -24,6 +26,7 @@ public sealed class LoginHandler : IRequestHandler<LoginCommand, Result<AuthResp
         IClock clock)
     {
         _users = users;
+        _assignments = assignments;
         _tenants = tenants;
         _hasher = hasher;
         _jwt = jwt;
@@ -58,14 +61,23 @@ public sealed class LoginHandler : IRequestHandler<LoginCommand, Result<AuthResp
                 tenantDto = ToTenantDto(tenant);
         }
 
-        return Result.Success(BuildResponse(user, accessToken, refreshToken, tenantDto));
+        var assignedOrganizationIds = await _assignments.GetOrganizationIdsByUserIdAsync(
+            user.Id.Value,
+            cancellationToken);
+
+        return Result.Success(BuildResponse(user, accessToken, refreshToken, tenantDto, assignedOrganizationIds));
     }
 
     private AuthResponse BuildResponse(
         Domain.Users.User user,
         string accessToken,
         string refreshToken,
-        AuthTenantDto? tenant) =>
+        AuthTenantDto? tenant,
+        IReadOnlyList<Guid> assignedOrganizationIds)
+    {
+        var manageableOrganizationIds = BuildManageableOrganizationIds(user.OrganizationId, assignedOrganizationIds);
+
+        return
         new(
             accessToken,
             refreshToken,
@@ -83,11 +95,36 @@ public sealed class LoginHandler : IRequestHandler<LoginCommand, Result<AuthResp
                 user.BirthDate?.ToString("yyyy-MM-dd"),
                 user.AvatarUrl,
                 user.TenantId?.ToString(),
-                user.TenantId.HasValue ? [user.TenantId.Value.ToString()] : null,
+                manageableOrganizationIds.Count > 0
+                    ? manageableOrganizationIds.Select(id => id.ToString()).ToArray()
+                    : null,
                 user.OrganizationId?.ToString(),
                 user.Locale,
                 user.DateFormat),
             tenant);
+    }
+
+    private static IReadOnlyList<Guid> BuildManageableOrganizationIds(
+        Guid? currentOrganizationId,
+        IReadOnlyList<Guid> assignedOrganizationIds)
+    {
+        var result = new List<Guid>();
+
+        if (currentOrganizationId.HasValue)
+        {
+            result.Add(currentOrganizationId.Value);
+        }
+
+        foreach (var organizationId in assignedOrganizationIds)
+        {
+            if (!result.Contains(organizationId))
+            {
+                result.Add(organizationId);
+            }
+        }
+
+        return result;
+    }
 
     private static AuthTenantDto ToTenantDto(Domain.Tenants.Tenant t) =>
         new(t.Id.Value.ToString(), t.Name, t.Key, t.ContactEmail, "plan-1", t.PlanType.ToString().ToLowerInvariant());

@@ -4,8 +4,14 @@ public sealed class EmailOptions
 {
     public const string SectionName = "Email";
 
-    /// <summary>"InMemory" (dev) or "Smtp" (prod)</summary>
-    public string Provider { get; init; } = "InMemory";
+    /// <summary>"Smtp"</summary>
+    public string Provider { get; init; } = "Smtp";
+
+    /// <summary>
+    /// When true, SMTP delivery failures are logged and suppressed.
+    /// Intended for local development/testing where no SMTP server is running.
+    /// </summary>
+    public bool SuppressDeliveryFailures { get; init; }
 
     public string FromAddress { get; init; } = "noreply@zonarhub.com";
     public string FromName { get; init; } = "ZonarHub";

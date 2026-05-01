@@ -1,7 +1,7 @@
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Application.Abstractions.ExternalServices;
 using ZonarHub.Infrastructure.Auth;
-using ZonarHub.Infrastructure.Caching.InMemory;
+using ZonarHub.Infrastructure.Caching;
 using ZonarHub.Infrastructure.ExternalServices;
 using ZonarHub.Infrastructure.Persistence;
 using ZonarHub.Infrastructure.Time;
@@ -25,7 +25,7 @@ public static class DependencyInjection
         services.AddPersistence(configuration);
         services.AddAuthInfrastructure(configuration);
 
-        services.AddSingleton<ICacheStore, InMemoryCacheStore>();
+        services.AddSingleton<ICacheStore, MemoryCacheStore>();
         services.AddSingleton<IClock, SystemClock>();
 
         services.AddScoped<ICurrentUser, HttpContextCurrentUser>();

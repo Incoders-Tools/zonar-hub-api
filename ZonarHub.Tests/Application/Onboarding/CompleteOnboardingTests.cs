@@ -46,6 +46,11 @@ public class CompleteOnboardingTests
         Assert.NotNull(user);
         Assert.Equal(result.Value.OrganizationId, user!.OrganizationId);
 
+        var assignmentIds = await h.UserOrganizationAssignmentRepository
+            .GetOrganizationIdsByUserIdAsync(UserId, CancellationToken.None);
+        Assert.Single(assignmentIds);
+        Assert.Equal(result.Value.OrganizationId, assignmentIds[0]);
+
         var tenantSports = await h.TenantSportRepository.GetEnabledSportIdsAsync(new TenantId(TenantId), CancellationToken.None);
         Assert.Equal(2, tenantSports.Count);
 
@@ -89,6 +94,11 @@ public class CompleteOnboardingTests
         var second = await h.CompleteOnboarding.Handle(command, CancellationToken.None);
         Assert.True(second.IsSuccess);
         Assert.Equal(first.Value.OrganizationId, second.Value.OrganizationId);
+
+        var assignmentIds = await h.UserOrganizationAssignmentRepository
+            .GetOrganizationIdsByUserIdAsync(UserId, CancellationToken.None);
+        Assert.Single(assignmentIds);
+        Assert.Equal(first.Value.OrganizationId, assignmentIds[0]);
 
         var listed = await h.OrganizationRepository.ListAsync(
             new OrganizationQuery(TenantId, null, null, null, 1, 50),
