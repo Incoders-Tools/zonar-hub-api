@@ -15,6 +15,22 @@ public sealed class Court : Entity<CourtId>
     public bool IsActive { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
 
+    public static Court Reconstitute(
+        CourtId id,
+        ComplexId complexId,
+        string name,
+        bool isActive,
+        DateTime createdAtUtc)
+    {
+        return new Court(id)
+        {
+            ComplexId = complexId,
+            Name = name,
+            IsActive = isActive,
+            CreatedAtUtc = createdAtUtc,
+        };
+    }
+
     public static Result<Court> Create(
         CourtId id,
         ComplexId complexId,

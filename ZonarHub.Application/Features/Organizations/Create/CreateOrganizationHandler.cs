@@ -26,6 +26,16 @@ public sealed class CreateOrganizationHandler
         CreateOrganizationCommand request,
         CancellationToken cancellationToken)
     {
+        var existing = await _organizations.GetByTenantAndDisplayNameAsync(
+            request.TenantId,
+            request.DisplayName,
+            cancellationToken);
+
+        if (existing is not null)
+        {
+            return Result.Failure<OrganizationResponse>(OrganizationErrors.DuplicateDisplayName);
+        }
+
         var created = Organization.Create(
             OrganizationId.New(),
             request.TenantId,

@@ -23,4 +23,8 @@ public static class OrganizationErrors
     public static readonly Error CrossTenantAccessDenied = Error.Validation(
         "organizations.cross_tenant_access_denied",
         "organizations.errors.cross_tenant_access_denied");
+
+    public static readonly Error DuplicateDisplayName = Error.Conflict(
+        "organizations.duplicate_display_name",
+        "organizations.errors.duplicate_display_name");
 }

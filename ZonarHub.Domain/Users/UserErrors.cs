@@ -6,6 +6,7 @@ public static class UserErrors
 {
     public static readonly Error NotFound = Error.NotFound("user.not_found", "users.errors.not_found");
     public static readonly Error EmailRequired = Error.Validation("user.email_required", "users.errors.email_required");
+    public static readonly Error FullNameRequired = Error.Validation("user.full_name_required", "users.errors.full_name_required");
     public static readonly Error EmailAlreadyExists = Error.Conflict("user.email_exists", "users.errors.email_exists");
     public static readonly Error PhoneAlreadyExists = Error.Conflict("user.phone_exists", "users.errors.phone_exists");
     public static readonly Error InvalidCredentials = Error.Validation("user.invalid_credentials", "users.errors.invalid_credentials");
@@ -13,4 +14,5 @@ public static class UserErrors
     public static readonly Error InvalidOrExpiredCode = Error.Validation("user.invalid_or_expired_code", "users.errors.invalid_or_expired_code");
     public static readonly Error InvalidOrExpiredResetToken = Error.Validation("user.invalid_or_expired_reset_token", "users.errors.invalid_or_expired_reset_token");
     public static readonly Error Inactive = Error.Validation("user.inactive", "users.errors.inactive");
+    public static readonly Error OrganizationIdRequired = Error.Validation("user.organization_id_required", "users.errors.organization_id_required");
 }

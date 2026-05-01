@@ -1,4 +1,5 @@
-using Microsoft.Extensions.Options;
+using System.Net.Http.Json;
+using System.Text.Json.Serialization;
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Domain.Complexes;
 using ZonarHub.Domain.Courts;
@@ -7,18 +8,64 @@ namespace ZonarHub.Infrastructure.Persistence.Supabase;
 
 internal sealed class CourtRepository : ICourtRepository
 {
-    private readonly SupabaseOptions _options;
+    private const string RestPath = "/rest/v1/courts";
 
-    public CourtRepository(IOptions<SupabaseOptions> options)
+    private readonly HttpClient _http;
+    private readonly SupabaseOperationContext _ops;
+
+    public CourtRepository(IHttpClientFactory factory, SupabaseOperationContext ops)
     {
-        _options = options.Value;
+        _http = factory.CreateClient(SupabaseHttpClientName.Name);
+        _ops = ops;
     }
 
-    public Task<IReadOnlyList<Court>> ListByComplexIdAsync(
+    public async Task<IReadOnlyList<Court>> ListByComplexIdAsync(
         ComplexId complexId,
         CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        var rows = await _http.GetFromJsonAsync<List<CourtRow>>(
+            $"{RestPath}?select=*&complex_id=eq.{complexId.Value}&order=name.asc",
+            cancellationToken) ?? [];
+
+        return rows.Select(ToDomain).ToList();
+    }
 
     public Task AddAsync(Court court, CancellationToken cancellationToken = default)
-        => throw new NotImplementedException();
+    {
+        var row = ToRow(court);
+        _ops.Enqueue((http, ct) => ExecuteAddAsync(http, row, ct));
+        return Task.CompletedTask;
+    }
+
+    private static Court ToDomain(CourtRow row) =>
+        Court.Reconstitute(
+            new CourtId(row.Id),
+            new ComplexId(row.ComplexId),
+            row.Name,
+            row.IsActive,
+            row.CreatedAtUtc);
+
+    private static CourtRow ToRow(Court court) =>
+        new(
+            court.Id.Value,
+            court.ComplexId.Value,
+            court.Name,
+            court.IsActive,
+            court.CreatedAtUtc);
+
+    private static async Task ExecuteAddAsync(HttpClient http, CourtRow row, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, RestPath);
+        req.Headers.Add("Prefer", "return=minimal");
+        req.Content = JsonContent.Create(row);
+        using var resp = await http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    private sealed record CourtRow(
+        [property: JsonPropertyName("id")] Guid Id,
+        [property: JsonPropertyName("complex_id")] Guid ComplexId,
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("is_active")] bool IsActive,
+        [property: JsonPropertyName("created_at_utc")] DateTime CreatedAtUtc);
 }

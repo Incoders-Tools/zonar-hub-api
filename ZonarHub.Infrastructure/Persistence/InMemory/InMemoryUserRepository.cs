@@ -48,6 +48,48 @@ public sealed class InMemoryUserRepository : IUserRepository
         return Task.FromResult(user);
     }
 
+    public Task<(IReadOnlyList<User> Items, int TotalCount)> ListAsync(
+        UserQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        IEnumerable<User> source = _store.Data.Values;
+
+        if (query.TenantId is { } tenantId)
+        {
+            source = source.Where(u => u.TenantId == tenantId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var needle = query.Search.Trim();
+            source = source.Where(u =>
+                u.Email.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+                u.FullName.Contains(needle, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (query.Role is { } role)
+        {
+            source = source.Where(u => u.Role == role);
+        }
+
+        if (query.IsActive is { } isActive)
+        {
+            source = source.Where(u => u.IsActive == isActive);
+        }
+
+        var filtered = source
+            .OrderBy(u => u.Email, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var total = filtered.Count;
+        IReadOnlyList<User> page = filtered
+            .Skip((query.Page - 1) * query.PageSize)
+            .Take(query.PageSize)
+            .ToList();
+
+        return Task.FromResult((page, total));
+    }
+
     public Task AddAsync(User user, CancellationToken cancellationToken = default)
     {
         if (!_store.Data.TryAdd(user.Id, user))
@@ -58,5 +100,11 @@ public sealed class InMemoryUserRepository : IUserRepository
     public void Update(User user)
     {
         _store.Data[user.Id] = user;
+    }
+
+    public Task RemoveAsync(UserId id, CancellationToken cancellationToken = default)
+    {
+        _store.Data.TryRemove(id, out _);
+        return Task.CompletedTask;
     }
 }

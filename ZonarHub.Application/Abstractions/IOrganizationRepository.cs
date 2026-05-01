@@ -9,6 +9,11 @@ public interface IOrganizationRepository
 {
     Task<Organization?> GetByIdAsync(OrganizationId id, CancellationToken cancellationToken = default);
 
+    Task<Organization?> GetByTenantAndDisplayNameAsync(
+        Guid tenantId,
+        string displayName,
+        CancellationToken cancellationToken = default);
+
     Task<(IReadOnlyList<Organization> Items, int TotalCount)> ListAsync(
         OrganizationQuery query,
         CancellationToken cancellationToken = default);

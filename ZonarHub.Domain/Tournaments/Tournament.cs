@@ -23,6 +23,34 @@ public sealed class Tournament : Entity<TournamentId>
     public DateTime CreatedAtUtc { get; private set; }
     public DateTime UpdatedAtUtc { get; private set; }
 
+    public static Tournament Reconstitute(
+        TournamentId id,
+        OrganizationId organizationId,
+        ComplexId? complexId,
+        SportId sportId,
+        string name,
+        DateOnly startDate,
+        DateOnly endDate,
+        TournamentStatus status,
+        bool isActive,
+        DateTime createdAtUtc,
+        DateTime updatedAtUtc)
+    {
+        return new Tournament(id)
+        {
+            OrganizationId = organizationId,
+            ComplexId = complexId,
+            SportId = sportId,
+            Name = name,
+            StartDate = startDate,
+            EndDate = endDate,
+            Status = status,
+            IsActive = isActive,
+            CreatedAtUtc = createdAtUtc,
+            UpdatedAtUtc = updatedAtUtc,
+        };
+    }
+
     public static Result<Tournament> Create(
         TournamentId id,
         OrganizationId organizationId,

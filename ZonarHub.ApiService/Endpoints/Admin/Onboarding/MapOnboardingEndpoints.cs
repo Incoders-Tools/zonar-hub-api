@@ -19,7 +19,9 @@ public static class OnboardingEndpointsExtensions
             .WithName("CompleteOnboarding")
             .WithSummary("Persist all data collected during the first-run onboarding wizard")
             .Produces<CompleteOnboardingResponse>(StatusCodes.Status201Created)
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .RequireAuthorization("AdminOrAbove");
 
         return app;
     }
@@ -35,7 +37,7 @@ public static class OnboardingEndpointsExtensions
         if (!Enum.TryParse<OrganizationType>(body.OrganizationType, ignoreCase: true, out var orgType))
         {
             return TypedResults.Problem(
-                "Invalid organization type.",
+                detail: "onboarding.errors.org_type_invalid",
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
@@ -46,7 +48,7 @@ public static class OnboardingEndpointsExtensions
                 !DateOnly.TryParse(t.EndDate, out var endDate))
             {
                 return TypedResults.Problem(
-                    "Tournament dates must be in YYYY-MM-DD format.",
+                    detail: "onboarding.errors.tournament_date_format_invalid",
                     statusCode: StatusCodes.Status400BadRequest);
             }
 

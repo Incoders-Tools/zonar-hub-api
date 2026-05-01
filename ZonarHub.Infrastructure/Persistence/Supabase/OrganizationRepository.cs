@@ -28,6 +28,27 @@ internal sealed class OrganizationRepository : IOrganizationRepository
         return row is null ? null : ToDomain(row);
     }
 
+    public async Task<Organization?> GetByTenantAndDisplayNameAsync(
+        Guid tenantId,
+        string displayName,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = Uri.EscapeDataString(displayName.Trim());
+        var url = $"{RestPath}?select=*&tenant_id=eq.{tenantId}&display_name=ilike.{normalized}&limit=1";
+        var rows = await _http.GetFromJsonAsync<List<OrganizationRow>>(url, cancellationToken);
+        var row = rows?.FirstOrDefault();
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        // Guard against ilike pattern semantics to ensure exact normalized match.
+        return string.Equals(row.DisplayName.Trim(), displayName.Trim(), StringComparison.OrdinalIgnoreCase)
+            ? ToDomain(row)
+            : null;
+    }
+
     public async Task<(IReadOnlyList<Organization> Items, int TotalCount)> ListAsync(
         OrganizationQuery query,
         CancellationToken cancellationToken = default)

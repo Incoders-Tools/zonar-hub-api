@@ -15,7 +15,6 @@ internal static class InMemoryPersistenceExtensions
         // Shared stores
         services.AddSingleton<InMemorySystemSettingStore>();
         services.AddSingleton<InMemoryOrganizationStore>();
-        services.AddSingleton<InMemorySocialNetworkStore>();
         services.AddSingleton<InMemorySportStore>();
         services.AddSingleton<InMemoryOrganizationSportStore>();
         services.AddSingleton<InMemoryTenantSportStore>();
@@ -23,13 +22,13 @@ internal static class InMemoryPersistenceExtensions
         services.AddSingleton<InMemoryCourtStore>();
         services.AddSingleton<InMemoryTournamentStore>();
         services.AddSingleton<InMemoryUserStore>();
+        services.AddSingleton<InMemoryUserOrganizationAssignmentStore>();
         services.AddSingleton<InMemoryTenantStore>();
         services.AddSingleton<InMemoryEmailTemplateStore>();
 
         // Repository adapters
         services.AddScoped<ISystemSettingRepository, InMemorySystemSettingRepository>();
         services.AddScoped<IOrganizationRepository, InMemoryOrganizationRepository>();
-        services.AddScoped<ISocialNetworkRepository, InMemorySocialNetworkRepository>();
         services.AddScoped<ISportRepository, InMemorySportRepository>();
         services.AddScoped<IOrganizationSportRepository, InMemoryOrganizationSportRepository>();
         services.AddScoped<ITenantSportRepository, InMemoryTenantSportRepository>();
@@ -37,6 +36,7 @@ internal static class InMemoryPersistenceExtensions
         services.AddScoped<ICourtRepository, InMemoryCourtRepository>();
         services.AddScoped<ITournamentRepository, InMemoryTournamentRepository>();
         services.AddScoped<IUserRepository, InMemoryUserRepository>();
+        services.AddScoped<IUserOrganizationAssignmentRepository, InMemoryUserOrganizationAssignmentRepository>();
         services.AddScoped<ITenantRepository, InMemoryTenantRepository>();
         services.AddScoped<IEmailTemplateRepository, InMemoryEmailTemplateRepository>();
 

@@ -169,4 +169,39 @@ public sealed class User : Entity<UserId>
         RefreshTokenExpiresAtUtc = null;
         UpdatedAtUtc = DateTime.UtcNow;
     }
+
+    public Result AssignOrganization(Guid organizationId, DateTime nowUtc)
+    {
+        if (organizationId == Guid.Empty)
+        {
+            return Result.Failure(UserErrors.OrganizationIdRequired);
+        }
+
+        OrganizationId = organizationId;
+        UpdatedAtUtc = nowUtc;
+        return Result.Success();
+    }
+
+    public Result UpdateAdminProfile(
+        string fullName,
+        string? phone,
+        UserRole role,
+        bool isActive,
+        Guid? organizationId,
+        DateTime nowUtc)
+    {
+        if (string.IsNullOrWhiteSpace(fullName))
+        {
+            return Result.Failure(UserErrors.FullNameRequired);
+        }
+
+        FullName = fullName.Trim();
+        Phone = string.IsNullOrWhiteSpace(phone) ? null : phone.Trim();
+        Role = role;
+        IsActive = isActive;
+        OrganizationId = organizationId;
+        UpdatedAtUtc = nowUtc;
+
+        return Result.Success();
+    }
 }

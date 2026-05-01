@@ -41,6 +41,27 @@ public sealed class SystemSetting : Entity<SystemSettingId>
 
     public DateTime UpdatedAtUtc { get; private set; }
 
+    public static SystemSetting Reconstitute(
+        SystemSettingId id,
+        string key,
+        string value,
+        SystemSettingScope scope,
+        Guid? tenantId,
+        Guid? userId,
+        DateTime createdAtUtc,
+        DateTime updatedAtUtc)
+    {
+        return new SystemSetting(
+            id,
+            key,
+            value,
+            scope,
+            tenantId,
+            userId,
+            createdAtUtc,
+            updatedAtUtc);
+    }
+
     public static Result<SystemSetting> Create(
         SystemSettingId id,
         string key,

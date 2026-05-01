@@ -107,4 +107,22 @@ public class OrganizationLifecycleTests
         Assert.Equal(1, activeOnly.Value.TotalCount);
         Assert.All(activeOnly.Value.Items, o => Assert.True(o.IsActive));
     }
+
+    [Fact]
+    public async Task CreateOrganization_WithDuplicateDisplayNameInSameTenant_ReturnsConflict()
+    {
+        var h = new OrganizationsTestHarness(Now);
+
+        var first = await h.CreateOrg.Handle(
+            new CreateOrganizationCommand(TenantA, "Padel Club", null, null, OrganizationType.Circuito, null, UserId),
+            CancellationToken.None);
+        Assert.True(first.IsSuccess);
+
+        var duplicate = await h.CreateOrg.Handle(
+            new CreateOrganizationCommand(TenantA, "padel club", null, null, OrganizationType.Circuito, null, UserId),
+            CancellationToken.None);
+
+        Assert.True(duplicate.IsFailure);
+        Assert.Equal("organizations.duplicate_display_name", duplicate.Error.Code);
+    }
 }

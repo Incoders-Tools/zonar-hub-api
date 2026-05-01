@@ -32,7 +32,6 @@ internal static class SupabasePersistenceExtensions
 
         services.AddScoped<ISystemSettingRepository, SystemSettingRepository>();
         services.AddScoped<IOrganizationRepository, OrganizationRepository>();
-        services.AddScoped<ISocialNetworkRepository, SocialNetworkRepository>();
         services.AddScoped<ISportRepository, SportRepository>();
         services.AddScoped<IOrganizationSportRepository, OrganizationSportRepository>();
         services.AddScoped<ITenantSportRepository, TenantSportRepository>();
@@ -40,6 +39,7 @@ internal static class SupabasePersistenceExtensions
         services.AddScoped<ICourtRepository, CourtRepository>();
         services.AddScoped<ITournamentRepository, TournamentRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IUserOrganizationAssignmentRepository, UserOrganizationAssignmentRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IEmailTemplateRepository, EmailTemplateRepository>();
 

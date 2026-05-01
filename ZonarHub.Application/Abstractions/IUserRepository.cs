@@ -14,7 +14,21 @@ public interface IUserRepository
 
     Task<User?> GetByRefreshTokenAsync(string token, CancellationToken cancellationToken = default);
 
+    Task<(IReadOnlyList<User> Items, int TotalCount)> ListAsync(
+        UserQuery query,
+        CancellationToken cancellationToken = default);
+
     Task AddAsync(User user, CancellationToken cancellationToken = default);
 
     void Update(User user);
+
+    Task RemoveAsync(UserId id, CancellationToken cancellationToken = default);
 }
+
+public sealed record UserQuery(
+    Guid? TenantId,
+    string? Search,
+    UserRole? Role,
+    bool? IsActive,
+    int Page,
+    int PageSize);

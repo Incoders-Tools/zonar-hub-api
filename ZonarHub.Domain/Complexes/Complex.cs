@@ -18,6 +18,28 @@ public sealed class Complex : Entity<ComplexId>
     public DateTime CreatedAtUtc { get; private set; }
     public DateTime UpdatedAtUtc { get; private set; }
 
+    public static Complex Reconstitute(
+        ComplexId id,
+        OrganizationId organizationId,
+        string name,
+        string address,
+        string? location,
+        bool isActive,
+        DateTime createdAtUtc,
+        DateTime updatedAtUtc)
+    {
+        return new Complex(id)
+        {
+            OrganizationId = organizationId,
+            Name = name,
+            Address = address,
+            Location = location,
+            IsActive = isActive,
+            CreatedAtUtc = createdAtUtc,
+            UpdatedAtUtc = updatedAtUtc,
+        };
+    }
+
     public static Result<Complex> Create(
         ComplexId id,
         OrganizationId organizationId,

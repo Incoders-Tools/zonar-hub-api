@@ -63,6 +63,65 @@ internal sealed class UserRepository : IUserRepository
         return row is null ? null : ToDomain(row);
     }
 
+    public async Task<(IReadOnlyList<User> Items, int TotalCount)> ListAsync(
+        UserQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        var parts = new List<string>
+        {
+            "select=*",
+            "order=email.asc"
+        };
+
+        if (query.TenantId is { } tenantId)
+        {
+            parts.Add($"tenant_id=eq.{tenantId}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var needle = Uri.EscapeDataString(query.Search.Trim());
+            parts.Add($"or=(email.ilike.*{needle}*,full_name.ilike.*{needle}*)");
+        }
+
+        if (query.Role is { } role)
+        {
+            parts.Add($"role=eq.{Uri.EscapeDataString(ToStorageRole(role))}");
+        }
+
+        if (query.IsActive is { } isActive)
+        {
+            parts.Add($"is_active=eq.{isActive.ToString().ToLowerInvariant()}");
+        }
+
+        var offset = Math.Max(0, query.Page - 1) * query.PageSize;
+        parts.Add($"offset={offset}");
+        parts.Add($"limit={query.PageSize}");
+
+        using var req = new HttpRequestMessage(HttpMethod.Get, $"{RestPath}?{string.Join("&", parts)}");
+        req.Headers.Add("Prefer", "count=exact");
+
+        using var resp = await _http.SendAsync(req, cancellationToken);
+        resp.EnsureSuccessStatusCode();
+
+        var totalCount = 0;
+        if (resp.Headers.TryGetValues("Content-Range", out var crValues))
+        {
+            var contentRange = crValues.FirstOrDefault();
+            if (contentRange is not null)
+            {
+                var slash = contentRange.IndexOf('/');
+                if (slash >= 0 && int.TryParse(contentRange[(slash + 1)..], out var total))
+                {
+                    totalCount = total;
+                }
+            }
+        }
+
+        var rows = await resp.Content.ReadFromJsonAsync<List<UserRow>>(cancellationToken) ?? [];
+        return (rows.Select(ToDomain).ToList(), totalCount);
+    }
+
     public Task AddAsync(User user, CancellationToken cancellationToken = default)
     {
         var row = ToRow(user);
@@ -74,6 +133,12 @@ internal sealed class UserRepository : IUserRepository
     {
         var patch = ToPatchRow(user);
         _ops.Enqueue((http, ct) => ExecutePatchAsync(http, user.Id.Value, patch, ct));
+    }
+
+    public Task RemoveAsync(UserId id, CancellationToken cancellationToken = default)
+    {
+        _ops.Enqueue((http, ct) => ExecuteDeleteAsync(http, id.Value, ct));
+        return Task.CompletedTask;
     }
 
     private async Task<bool> ExistsAsync(string filter, CancellationToken cancellationToken)
@@ -100,6 +165,12 @@ internal sealed class UserRepository : IUserRepository
         req.Headers.Add("Prefer", "return=minimal");
         req.Content = JsonContent.Create(patch);
         using var resp = await http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    private static async Task ExecuteDeleteAsync(HttpClient http, Guid id, CancellationToken ct)
+    {
+        using var resp = await http.DeleteAsync($"{RestPath}?id=eq.{id}", ct);
         resp.EnsureSuccessStatusCode();
     }
 

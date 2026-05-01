@@ -18,6 +18,19 @@ public sealed class InMemoryOrganizationRepository : IOrganizationRepository
         return Task.FromResult(org);
     }
 
+    public Task<Organization?> GetByTenantAndDisplayNameAsync(
+        Guid tenantId,
+        string displayName,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = displayName.Trim();
+        var match = _store.Data.Values.FirstOrDefault(o =>
+            o.TenantId == tenantId &&
+            string.Equals(o.DisplayName, normalized, StringComparison.OrdinalIgnoreCase));
+
+        return Task.FromResult(match);
+    }
+
     public Task<(IReadOnlyList<Organization> Items, int TotalCount)> ListAsync(
         OrganizationQuery query,
         CancellationToken cancellationToken = default)
