@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+
+    <PackageType>Template</PackageType>
+    <PackageId>ZonarHubs</PackageId>
+    <PackageVersion>1.0.0</PackageVersion>
+    <Authors>Incoders</Authors>
+
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+
+    <!-- 🔥 CLAVE -->
+    <NoBuild>true</NoBuild>
+
+    <ContentTargetFolders>content</ContentTargetFolders>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="**\*"
+             Exclude="**\bin\**;**\obj\**;.git\**;.vs\**;**\*.user;**\*.nupkg"
+             Pack="true" />
+  </ItemGroup>
+
+</Project>

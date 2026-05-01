@@ -1,0 +1,38 @@
+name: Publish Incoders Template
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Add GitHub Packages source
+        run: |
+          dotnet nuget add source \
+            --username Incoders-Tools \
+            --password "${{ secrets.GITHUB_TOKEN }}" \
+            --store-password-in-clear-text \
+            --name github \
+            "https://nuget.pkg.github.com/Incoders-Tools/index.json"
+
+      - name: Pack template
+        run: dotnet pack ZonarHub.csproj -c Release -o ./artifacts
+
+      - name: Publish package
+        run: dotnet nuget push "./artifacts/*.nupkg" --source github --api-key "${{ secrets.GITHUB_TOKEN }}" --skip-duplicate

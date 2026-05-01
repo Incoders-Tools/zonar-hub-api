@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="ZonarHub.ApiService/ZonarHub.ApiService.csproj" />
+  <Project Path="ZonarHub.AppHost/ZonarHub.AppHost.csproj" />
+  <Project Path="ZonarHub.Application/ZonarHub.Application.csproj" />
+  <Project Path="ZonarHub.Domain/ZonarHub.Domain.csproj" />
+  <Project Path="ZonarHub.Infrastructure/ZonarHub.Infrastructure.csproj" />
+  <Project Path="ZonarHub.ServiceDefaults/ZonarHub.ServiceDefaults.csproj" />
+  <Project Path="ZonarHub.Tests/ZonarHub.Tests.csproj" />
+  <Project Path="ZonarHub.Web/ZonarHub.Web.csproj" />
+</Solution>
