@@ -15,6 +15,8 @@ public interface IEmailTemplateRepository
     Task AddAsync(EmailTemplate template, CancellationToken cancellationToken = default);
 
     void Update(EmailTemplate template);
+
+    void Remove(EmailTemplate template);
 }
 
 public sealed record EmailTemplateQuery(

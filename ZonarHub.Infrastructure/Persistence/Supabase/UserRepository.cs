@@ -105,7 +105,7 @@ internal sealed class UserRepository : IUserRepository
         resp.EnsureSuccessStatusCode();
 
         var totalCount = 0;
-        if (resp.Headers.TryGetValues("Content-Range", out var crValues))
+        if (resp.Content.Headers.TryGetValues("Content-Range", out var crValues))
         {
             var contentRange = crValues.FirstOrDefault();
             if (contentRange is not null)

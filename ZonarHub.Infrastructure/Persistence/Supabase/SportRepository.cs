@@ -63,7 +63,7 @@ internal sealed class SportRepository : ISportRepository
         resp.EnsureSuccessStatusCode();
 
         var totalCount = 0;
-        if (resp.Headers.TryGetValues("Content-Range", out var crValues))
+        if (resp.Content.Headers.TryGetValues("Content-Range", out var crValues))
         {
             var cr = crValues.FirstOrDefault();
             if (cr is not null)

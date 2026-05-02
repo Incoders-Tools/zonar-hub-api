@@ -47,7 +47,7 @@ internal sealed class EmailTemplateRepository : IEmailTemplateRepository
         resp.EnsureSuccessStatusCode();
 
         var totalCount = 0;
-        if (resp.Headers.TryGetValues("Content-Range", out var crValues))
+        if (resp.Content.Headers.TryGetValues("Content-Range", out var crValues))
         {
             var cr = crValues.FirstOrDefault();
             if (cr is not null)
@@ -75,6 +75,11 @@ internal sealed class EmailTemplateRepository : IEmailTemplateRepository
     {
         var patch = ToPatchRow(template);
         _ops.Enqueue((http, ct) => ExecutePatchAsync(http, template.Id.Value, patch, ct));
+    }
+
+    public void Remove(EmailTemplate template)
+    {
+        _ops.Enqueue((http, ct) => ExecuteDeleteAsync(http, template.Id.Value, ct));
     }
 
     private static string BuildListQueryString(EmailTemplateQuery query)
@@ -119,6 +124,13 @@ internal sealed class EmailTemplateRepository : IEmailTemplateRepository
         using var req = new HttpRequestMessage(HttpMethod.Patch, $"{RestPath}?id=eq.{id}");
         req.Headers.Add("Prefer", "return=minimal");
         req.Content = JsonContent.Create(row);
+        using var resp = await http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    private static async Task ExecuteDeleteAsync(HttpClient http, Guid id, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Delete, $"{RestPath}?id=eq.{id}");
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
     }

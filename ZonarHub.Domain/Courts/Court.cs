@@ -51,4 +51,15 @@ public sealed class Court : Entity<CourtId>
             CreatedAtUtc = nowUtc,
         });
     }
+
+    public Result Update(string name, bool isActive)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return Result.Failure(CourtErrors.NameRequired);
+
+        Name = name.Trim();
+        IsActive = isActive;
+
+        return Result.Success();
+    }
 }

@@ -8,6 +8,10 @@ public static class EmailTemplateErrors
         "email_templates.not_found",
         "email_templates.errors.not_found");
 
+    public static readonly Error DuplicateKey = Error.Conflict(
+        "email_templates.duplicate_key",
+        "email_templates.errors.duplicate_key");
+
     public static readonly Error KeyRequired = Error.Validation(
         "email_templates.key_required",
         "email_templates.errors.key_required");

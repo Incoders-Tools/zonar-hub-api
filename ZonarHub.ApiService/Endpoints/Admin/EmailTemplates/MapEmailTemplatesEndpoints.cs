@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Mvc;
 using ZonarHub.ApiService.Endpoints.Common;
 using ZonarHub.Application.Common.Pagination;
 using ZonarHub.Application.Features.EmailTemplates;
+using ZonarHub.Application.Features.EmailTemplates.Create;
+using ZonarHub.Application.Features.EmailTemplates.Delete;
 using ZonarHub.Application.Features.EmailTemplates.GetAll;
 using ZonarHub.Application.Features.EmailTemplates.GetById;
 using ZonarHub.Application.Features.EmailTemplates.Update;
@@ -18,7 +20,7 @@ public static class EmailTemplatesEndpointsExtensions
     {
         var group = app.MapGroup(RoutePrefix)
             .WithTags(Tag)
-            .RequireAuthorization("SystemAdminOnly");
+            .RequireAuthorization("AdminOrAbove");
 
         group.MapGet("/", ListAsync)
             .WithName("ListEmailTemplates")
@@ -36,11 +38,27 @@ public static class EmailTemplatesEndpointsExtensions
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        group.MapPost("/", CreateAsync)
+            .WithName("CreateEmailTemplate")
+            .WithSummary("Create a new system email template")
+            .Produces<EmailTemplateResponse>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
         group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateEmailTemplate")
             .WithSummary("Update a system email template")
             .Produces<EmailTemplateResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
+        group.MapDelete("/{id:guid}", DeleteAsync)
+            .WithName("DeleteEmailTemplate")
+            .WithSummary("Delete a system email template")
+            .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -70,6 +88,22 @@ public static class EmailTemplatesEndpointsExtensions
         return result.Match(t => (IResult)TypedResults.Ok(t));
     }
 
+    private static async Task<IResult> CreateAsync(
+        [FromBody] CreateEmailTemplateRequest body,
+        ISender sender,
+        CancellationToken cancellationToken)
+    {
+        var command = new CreateEmailTemplateCommand(
+            body.Key,
+            body.Subject,
+            body.HtmlBody,
+            body.Description,
+            body.IsActive);
+
+        var result = await sender.Send(command, cancellationToken);
+        return result.Match(t => TypedResults.Created($"{RoutePrefix}/{t.Id}", t));
+    }
+
     private static async Task<IResult> UpdateAsync(
         Guid id,
         [FromBody] UpdateEmailTemplateRequest body,
@@ -86,7 +120,23 @@ public static class EmailTemplatesEndpointsExtensions
         var result = await sender.Send(command, cancellationToken);
         return result.Match(t => (IResult)TypedResults.Ok(t));
     }
+
+    private static async Task<IResult> DeleteAsync(
+        Guid id,
+        ISender sender,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new DeleteEmailTemplateCommand(id), cancellationToken);
+        return result.Match(() => (IResult)TypedResults.NoContent());
+    }
 }
+
+public sealed record CreateEmailTemplateRequest(
+    string Key,
+    string Subject,
+    string HtmlBody,
+    string? Description,
+    bool IsActive);
 
 public sealed record UpdateEmailTemplateRequest(
     string Subject,

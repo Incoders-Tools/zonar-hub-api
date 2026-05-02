@@ -90,7 +90,12 @@ public static class OrganizationsEndpointsExtensions
         ISender sender,
         CancellationToken cancellationToken)
     {
-        var tenantId = httpContext.GetTenantId() ?? body.TenantId;
+        var tenantId = httpContext.GetTenantId() ?? body.TenantId ?? Guid.Empty;
+
+        if (tenantId == Guid.Empty)
+        {
+            return TypedResults.Problem("Tenant ID is required.", statusCode: StatusCodes.Status400BadRequest);
+        }
 
         if (!Enum.TryParse<OrganizationType>(body.Type, ignoreCase: true, out var orgType))
         {
@@ -151,7 +156,7 @@ public static class OrganizationsEndpointsExtensions
 }
 
 public sealed record CreateOrganizationRequest(
-    Guid TenantId,
+    Guid? TenantId,
     string DisplayName,
     string? LegalName,
     string? Description,

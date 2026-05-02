@@ -19,6 +19,24 @@ internal sealed class CourtRepository : ICourtRepository
         _ops = ops;
     }
 
+    public async Task<IReadOnlyList<Court>> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        var rows = await _http.GetFromJsonAsync<List<CourtRow>>(
+            $"{RestPath}?select=*&order=name.asc",
+            cancellationToken) ?? [];
+
+        return rows.Select(ToDomain).ToList();
+    }
+
+    public async Task<Court?> GetByIdAsync(CourtId id, CancellationToken cancellationToken = default)
+    {
+        var rows = await _http.GetFromJsonAsync<List<CourtRow>>(
+            $"{RestPath}?select=*&id=eq.{id.Value}",
+            cancellationToken) ?? [];
+
+        return rows.FirstOrDefault() is { } row ? ToDomain(row) : null;
+    }
+
     public async Task<IReadOnlyList<Court>> ListByComplexIdAsync(
         ComplexId complexId,
         CancellationToken cancellationToken = default)
@@ -35,6 +53,17 @@ internal sealed class CourtRepository : ICourtRepository
         var row = ToRow(court);
         _ops.Enqueue((http, ct) => ExecuteAddAsync(http, row, ct));
         return Task.CompletedTask;
+    }
+
+    public void Update(Court court)
+    {
+        var row = ToRow(court);
+        _ops.Enqueue((http, ct) => ExecuteUpdateAsync(http, row.Id, row, ct));
+    }
+
+    public void Remove(Court court)
+    {
+        _ops.Enqueue((http, ct) => ExecuteDeleteAsync(http, court.Id.Value, ct));
     }
 
     private static Court ToDomain(CourtRow row) =>
@@ -58,6 +87,22 @@ internal sealed class CourtRepository : ICourtRepository
         using var req = new HttpRequestMessage(HttpMethod.Post, RestPath);
         req.Headers.Add("Prefer", "return=minimal");
         req.Content = JsonContent.Create(row);
+        using var resp = await http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    private static async Task ExecuteUpdateAsync(HttpClient http, Guid id, CourtRow row, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Patch, $"{RestPath}?id=eq.{id}");
+        req.Headers.Add("Prefer", "return=minimal");
+        req.Content = JsonContent.Create(row);
+        using var resp = await http.SendAsync(req, ct);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    private static async Task ExecuteDeleteAsync(HttpClient http, Guid id, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Delete, $"{RestPath}?id=eq.{id}");
         using var resp = await http.SendAsync(req, ct);
         resp.EnsureSuccessStatusCode();
     }

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using ZonarHub.ApiService.Endpoints.Admin.Onboarding;
 using ZonarHub.ApiService.Endpoints.Admin.EmailTemplates;
+using ZonarHub.ApiService.Endpoints.Admin.Courts;
 using ZonarHub.ApiService.Endpoints.Admin.Organizations;
 using ZonarHub.ApiService.Endpoints.Admin.Sports;
 using ZonarHub.ApiService.Endpoints.Admin.Tenants;
@@ -94,6 +95,7 @@ app.MapSportsEndpoints();
 app.MapAdminUsersEndpoints();
 app.MapOnboardingEndpoints();
 app.MapEmailTemplatesEndpoints();
+app.MapCourtsEndpoints();
 
 app.MapDefaultEndpoints();
 
