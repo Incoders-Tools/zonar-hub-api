@@ -21,6 +21,7 @@ internal static class InMemoryPersistenceExtensions
         services.AddSingleton<InMemoryComplexStore>();
         services.AddSingleton<InMemoryCourtStore>();
         services.AddSingleton<InMemoryTournamentStore>();
+        services.AddSingleton<InMemoryRegistrationStore>();
         services.AddSingleton<InMemoryUserStore>();
         services.AddSingleton<InMemoryUserOrganizationAssignmentStore>();
         services.AddSingleton<InMemoryTenantStore>();
@@ -35,6 +36,7 @@ internal static class InMemoryPersistenceExtensions
         services.AddScoped<IComplexRepository, InMemoryComplexRepository>();
         services.AddScoped<ICourtRepository, InMemoryCourtRepository>();
         services.AddScoped<ITournamentRepository, InMemoryTournamentRepository>();
+        services.AddScoped<IRegistrationReadRepository, InMemoryRegistrationReadRepository>();
         services.AddScoped<IUserRepository, InMemoryUserRepository>();
         services.AddScoped<IUserOrganizationAssignmentRepository, InMemoryUserOrganizationAssignmentRepository>();
         services.AddScoped<ITenantRepository, InMemoryTenantRepository>();

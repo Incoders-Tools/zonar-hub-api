@@ -29,6 +29,17 @@ internal sealed class ComplexRepository : IComplexRepository
         return row is null ? null : ToDomain(row);
     }
 
+    public async Task<IReadOnlyList<Complex>> ListByOrganizationAsync(
+        OrganizationId organizationId,
+        CancellationToken cancellationToken = default)
+    {
+        var rows = await _http.GetFromJsonAsync<List<ComplexRow>>(
+            $"{RestPath}?select=*&organization_id=eq.{organizationId.Value}&order=name.asc",
+            cancellationToken) ?? [];
+
+        return rows.Select(ToDomain).ToList();
+    }
+
     public Task AddAsync(Complex complex, CancellationToken cancellationToken = default)
     {
         var row = ToRow(complex);

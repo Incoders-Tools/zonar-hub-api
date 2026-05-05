@@ -31,6 +31,17 @@ internal sealed class TournamentRepository : ITournamentRepository
         return row is null ? null : ToDomain(row);
     }
 
+    public async Task<IReadOnlyList<Tournament>> ListByOrganizationAsync(
+        OrganizationId organizationId,
+        CancellationToken cancellationToken = default)
+    {
+        var rows = await _http.GetFromJsonAsync<List<TournamentRow>>(
+            $"{RestPath}?select=*&organization_id=eq.{organizationId.Value}&order=start_date.desc",
+            cancellationToken) ?? [];
+
+        return rows.Select(ToDomain).ToList();
+    }
+
     public Task AddAsync(Tournament tournament, CancellationToken cancellationToken = default)
     {
         var row = ToRow(tournament);

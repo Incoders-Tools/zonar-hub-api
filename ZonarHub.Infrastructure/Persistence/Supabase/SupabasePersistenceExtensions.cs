@@ -38,10 +38,12 @@ internal static class SupabasePersistenceExtensions
         services.AddScoped<IComplexRepository, ComplexRepository>();
         services.AddScoped<ICourtRepository, CourtRepository>();
         services.AddScoped<ITournamentRepository, TournamentRepository>();
+        services.AddScoped<IRegistrationReadRepository, RegistrationReadRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUserOrganizationAssignmentRepository, UserOrganizationAssignmentRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IEmailTemplateRepository, EmailTemplateRepository>();
+        services.AddScoped<ITournamentModalityRepository, TournamentModalityRepository>();
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
 

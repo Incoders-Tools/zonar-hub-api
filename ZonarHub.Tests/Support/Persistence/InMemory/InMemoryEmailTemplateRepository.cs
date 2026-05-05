@@ -70,4 +70,9 @@ public sealed class InMemoryEmailTemplateRepository : IEmailTemplateRepository
     {
         _store.Templates[template.Id] = template;
     }
+
+    public void Remove(EmailTemplate template)
+    {
+        _store.Templates.TryRemove(template.Id, out _);
+    }
 }

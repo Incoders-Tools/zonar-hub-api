@@ -1,5 +1,6 @@
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Domain.Complexes;
+using ZonarHub.Domain.Organizations;
 
 namespace ZonarHub.Infrastructure.Persistence.InMemory;
 
@@ -16,6 +17,18 @@ public sealed class InMemoryComplexRepository : IComplexRepository
     {
         _store.Data.TryGetValue(id, out var complex);
         return Task.FromResult(complex);
+    }
+
+    public Task<IReadOnlyList<Complex>> ListByOrganizationAsync(
+        OrganizationId organizationId,
+        CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<Complex> result = _store.Data.Values
+            .Where(c => c.OrganizationId == organizationId)
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return Task.FromResult(result);
     }
 
     public Task AddAsync(Complex complex, CancellationToken cancellationToken = default)

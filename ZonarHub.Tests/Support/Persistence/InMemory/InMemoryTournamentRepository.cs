@@ -1,5 +1,6 @@
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Domain.Tournaments;
+using ZonarHub.Domain.Organizations;
 
 namespace ZonarHub.Infrastructure.Persistence.InMemory;
 
@@ -16,6 +17,19 @@ public sealed class InMemoryTournamentRepository : ITournamentRepository
     {
         _store.Data.TryGetValue(id, out var tournament);
         return Task.FromResult(tournament);
+    }
+
+    public Task<IReadOnlyList<Tournament>> ListByOrganizationAsync(
+        OrganizationId organizationId,
+        CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<Tournament> result = _store.Data.Values
+            .Where(t => t.OrganizationId == organizationId)
+            .OrderByDescending(t => t.StartDate)
+            .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return Task.FromResult(result);
     }
 
     public Task AddAsync(Tournament tournament, CancellationToken cancellationToken = default)

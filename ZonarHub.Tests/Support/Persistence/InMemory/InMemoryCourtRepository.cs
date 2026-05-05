@@ -55,6 +55,6 @@ public sealed class InMemoryCourtRepository : ICourtRepository
 
     public void Remove(Court court)
     {
-        _store.Data.Remove(court.Id);
+        _store.Data.TryRemove(court.Id, out _);
     }
 }

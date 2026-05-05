@@ -3,15 +3,19 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using ZonarHub.ApiService.Endpoints.Admin.Onboarding;
 using ZonarHub.ApiService.Endpoints.Admin.EmailTemplates;
+using ZonarHub.ApiService.Endpoints.Admin.Dashboard;
 using ZonarHub.ApiService.Endpoints.Admin.Courts;
 using ZonarHub.ApiService.Endpoints.Admin.Organizations;
 using ZonarHub.ApiService.Endpoints.Admin.Sports;
+using ZonarHub.ApiService.Endpoints.Admin.TournamentStatuses;
+using ZonarHub.ApiService.Endpoints.Admin.TournamentModalities;
 using ZonarHub.ApiService.Endpoints.Admin.Tenants;
 using ZonarHub.ApiService.Endpoints.Admin.Users;
 using ZonarHub.ApiService.Endpoints.Auth;
 using ZonarHub.ApiService.Endpoints.Common;
 using ZonarHub.ApiService.Endpoints.External;
 using ZonarHub.ApiService.Endpoints.SystemSettings;
+using ZonarHub.ApiService.Endpoints.UserPreferences;
 using ZonarHub.Application;
 using ZonarHub.Infrastructure.Auth;
 using ZonarHub.Infrastructure.DependencyInjection;
@@ -87,6 +91,7 @@ app.MapGet("/", () => "API service is running.");
 
 app.MapAuthEndpoints();
 app.MapSystemSettingsEndpoints();
+app.MapUserPreferencesEndpoints();
 app.MapExternalEndpoints();
 app.MapOrganizationsEndpoints();
 app.MapOrganizationSportsEndpoints();
@@ -96,6 +101,9 @@ app.MapAdminUsersEndpoints();
 app.MapOnboardingEndpoints();
 app.MapEmailTemplatesEndpoints();
 app.MapCourtsEndpoints();
+app.MapTournamentStatusesEndpoints();
+app.MapTournamentModalitiesEndpoints();
+app.MapAdminDashboardEndpoints();
 
 app.MapDefaultEndpoints();
 
