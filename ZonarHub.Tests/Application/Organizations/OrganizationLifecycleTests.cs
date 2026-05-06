@@ -4,6 +4,7 @@ using ZonarHub.Application.Features.Organizations.GetAll;
 using ZonarHub.Application.Features.Organizations.GetById;
 using ZonarHub.Application.Features.Organizations.Update;
 using ZonarHub.Domain.Organizations;
+using ZonarHub.Domain.Users;
 
 namespace ZonarHub.Tests.Application.Organizations;
 
@@ -124,5 +125,25 @@ public class OrganizationLifecycleTests
 
         Assert.True(duplicate.IsFailure);
         Assert.Equal("organizations.duplicate_display_name", duplicate.Error.Code);
+    }
+
+    [Fact]
+    public async Task CreateOrganization_AutoAssignsCreatorInOrganizationAssignments()
+    {
+        var h = new OrganizationsTestHarness(Now);
+        var creator = await h.SeedUserAsync(UserRole.Admin, TenantA, "creator@zonarhub.dev", "Creator User");
+
+        var created = await h.CreateOrg.Handle(
+            new CreateOrganizationCommand(TenantA, "Org Auto Assigned", null, null, OrganizationType.Circuito, null, creator.Id.Value),
+            CancellationToken.None);
+
+        Assert.True(created.IsSuccess);
+
+        var assignedOrganizationIds = await h.Assignments.GetOrganizationIdsByUserIdAsync(creator.Id.Value, CancellationToken.None);
+        Assert.Contains(created.Value.Id, assignedOrganizationIds);
+
+        var savedCreator = await h.Users.GetByIdAsync(creator.Id, CancellationToken.None);
+        Assert.NotNull(savedCreator);
+        Assert.Equal(created.Value.Id, savedCreator!.OrganizationId);
     }
 }

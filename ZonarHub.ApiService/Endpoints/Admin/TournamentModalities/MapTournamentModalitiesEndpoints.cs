@@ -13,10 +13,10 @@ public static class TournamentModalitiesEndpointsExtensions
     public static IEndpointRouteBuilder MapTournamentModalitiesEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup(RoutePrefix)
-            .WithTags(Tag)
-            .RequireAuthorization();
+            .WithTags(Tag);
 
         group.MapGet("/", GetAllAsync)
+            .AllowAnonymous()
             .WithName("GetAllTournamentModalities")
             .WithSummary("Get all tournament modalities")
             .WithDescription("Returns all active tournament modalities (Individual, Doubles, Teams).")

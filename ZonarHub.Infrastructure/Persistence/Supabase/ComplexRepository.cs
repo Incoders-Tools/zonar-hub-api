@@ -47,13 +47,57 @@ internal sealed class ComplexRepository : IComplexRepository
         return Task.CompletedTask;
     }
 
+    public async Task UpdateAsync(Complex complex, CancellationToken cancellationToken = default)
+    {
+        var body = new
+        {
+            name = complex.Name,
+            key = NormalizeOptional(complex.Key),
+            address = complex.Address,
+            location = NormalizeOptional(complex.Location),
+            description = NormalizeOptional(complex.Description),
+            sort_order = complex.SortOrder,
+            preponderance = complex.Preponderance,
+            logo_image_path = NormalizeOptional(complex.LogoImagePath),
+            cover_image_path = NormalizeOptional(complex.CoverImagePath),
+            layout_diagram_path = NormalizeOptional(complex.LayoutDiagramPath),
+            is_active = complex.IsActive,
+            updated_at_utc = complex.UpdatedAtUtc
+        };
+
+        using var req = new HttpRequestMessage(HttpMethod.Patch, $"{RestPath}?id=eq.{complex.Id.Value}")
+        {
+            Content = JsonContent.Create(body)
+        };
+        req.Headers.Add("Prefer", "return=minimal");
+        using var resp = await _http.SendAsync(req, cancellationToken);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    private static string? NormalizeOptional(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    public async Task<bool> DeleteAsync(ComplexId id, CancellationToken cancellationToken = default)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Delete, $"{RestPath}?id=eq.{id.Value}");
+        using var resp = await _http.SendAsync(req, cancellationToken);
+        return resp.IsSuccessStatusCode;
+    }
+
     private static Complex ToDomain(ComplexRow row) =>
         Complex.Reconstitute(
             new ComplexId(row.Id),
             new OrganizationId(row.OrganizationId),
             row.Name,
+            row.Key,
             row.Address,
             row.Location,
+            row.Description,
+            row.SortOrder,
+            row.Preponderance,
+            row.LogoImagePath,
+            row.CoverImagePath,
+            row.LayoutDiagramPath,
             row.IsActive,
             row.CreatedAtUtc,
             row.UpdatedAtUtc);
@@ -63,8 +107,15 @@ internal sealed class ComplexRepository : IComplexRepository
             complex.Id.Value,
             complex.OrganizationId.Value,
             complex.Name,
+            complex.Key,
             complex.Address,
             complex.Location,
+            complex.Description,
+            complex.SortOrder,
+            complex.Preponderance,
+            complex.LogoImagePath,
+            complex.CoverImagePath,
+            complex.LayoutDiagramPath,
             complex.IsActive,
             complex.CreatedAtUtc,
             complex.UpdatedAtUtc);
@@ -82,8 +133,15 @@ internal sealed class ComplexRepository : IComplexRepository
         [property: JsonPropertyName("id")] Guid Id,
         [property: JsonPropertyName("organization_id")] Guid OrganizationId,
         [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("key")] string? Key,
         [property: JsonPropertyName("address")] string Address,
         [property: JsonPropertyName("location")] string? Location,
+        [property: JsonPropertyName("description")] string? Description,
+        [property: JsonPropertyName("sort_order")] int SortOrder,
+        [property: JsonPropertyName("preponderance")] int Preponderance,
+        [property: JsonPropertyName("logo_image_path")] string? LogoImagePath,
+        [property: JsonPropertyName("cover_image_path")] string? CoverImagePath,
+        [property: JsonPropertyName("layout_diagram_path")] string? LayoutDiagramPath,
         [property: JsonPropertyName("is_active")] bool IsActive,
         [property: JsonPropertyName("created_at_utc")] DateTime CreatedAtUtc,
         [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc);

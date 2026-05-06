@@ -24,8 +24,10 @@ internal static class InMemoryPersistenceExtensions
         services.AddSingleton<InMemoryRegistrationStore>();
         services.AddSingleton<InMemoryUserStore>();
         services.AddSingleton<InMemoryUserOrganizationAssignmentStore>();
+        services.AddSingleton<InMemoryUserOrganizationPermissionStore>();
         services.AddSingleton<InMemoryTenantStore>();
         services.AddSingleton<InMemoryEmailTemplateStore>();
+        services.AddSingleton<ISystemPermissionCatalogRepository, InMemorySystemPermissionCatalogRepository>();
 
         // Repository adapters
         services.AddScoped<ISystemSettingRepository, InMemorySystemSettingRepository>();
@@ -39,6 +41,7 @@ internal static class InMemoryPersistenceExtensions
         services.AddScoped<IRegistrationReadRepository, InMemoryRegistrationReadRepository>();
         services.AddScoped<IUserRepository, InMemoryUserRepository>();
         services.AddScoped<IUserOrganizationAssignmentRepository, InMemoryUserOrganizationAssignmentRepository>();
+        services.AddScoped<IUserOrganizationPermissionRepository, InMemoryUserOrganizationPermissionRepository>();
         services.AddScoped<ITenantRepository, InMemoryTenantRepository>();
         services.AddScoped<IEmailTemplateRepository, InMemoryEmailTemplateRepository>();
 

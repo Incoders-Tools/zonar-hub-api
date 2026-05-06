@@ -1,6 +1,8 @@
 using System.Reflection;
 using FluentValidation;
 using ZonarHub.Application.Common;
+using ZonarHub.Application.Abstractions;
+using ZonarHub.Application.Features.AdminPermissions;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -25,6 +27,7 @@ public static class DependencyInjection
         });
 
         services.AddValidatorsFromAssembly(assembly, includeInternalTypes: true);
+        services.AddScoped<IUserPermissionService, UserPermissionService>();
 
         return services;
     }

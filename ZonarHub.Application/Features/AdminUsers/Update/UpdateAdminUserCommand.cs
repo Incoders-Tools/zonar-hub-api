@@ -10,4 +10,5 @@ public sealed record UpdateAdminUserCommand(
     string? RoleId,
     Guid? OrganizationId,
     IReadOnlyList<Guid>? TenantIds,
+    IReadOnlyList<AdminUserOrganizationPermissionInput>? PermissionsByOrganization,
     bool? IsActive) : IRequest<Result<AdminUserResponse>>;

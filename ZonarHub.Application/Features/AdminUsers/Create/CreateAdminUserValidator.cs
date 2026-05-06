@@ -28,5 +28,18 @@ internal sealed class CreateAdminUserValidator : AbstractValidator<CreateAdminUs
             .NotEqual(Guid.Empty)
             .WithMessage("admin.users.errors.organization_id_required")
             .When(x => x.OrganizationId.HasValue);
+
+        RuleForEach(x => x.PermissionsByOrganization)
+            .ChildRules(permission =>
+            {
+                permission.RuleFor(x => x.OrganizationId)
+                    .NotEqual(Guid.Empty)
+                    .WithMessage("admin.users.errors.organization_id_required");
+
+                permission.RuleForEach(x => x.ToolKeys)
+                    .NotEmpty()
+                    .WithMessage("admin.users.errors.tool_key_required");
+            })
+            .When(x => x.PermissionsByOrganization is not null);
     }
 }

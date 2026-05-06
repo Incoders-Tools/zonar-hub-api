@@ -131,17 +131,20 @@ public sealed class LoginHandler : IRequestHandler<LoginCommand, Result<AuthResp
 
     private static string RoleToId(UserRole role) => role switch
     {
-        UserRole.SystemAdmin => "role_system_admin",
-        UserRole.Admin => "role_admin",
-        UserRole.User => "role_user",
-        UserRole.Player => "role_player",
-        _ => "role_viewer",
+        UserRole.SystemAdmin => "role001",
+        UserRole.Admin => "role002",
+        UserRole.Viewer => "role003",
+        UserRole.Editor => "role004",
+        UserRole.User => "role005",
+        UserRole.Player => "role006",
+        _ => "role003",
     };
 
     private static string RoleToString(UserRole role) => role switch
     {
         UserRole.SystemAdmin => "system_admin",
         UserRole.Admin => "admin",
+        UserRole.Editor => "editor",
         UserRole.User => "user",
         UserRole.Player => "player",
         _ => "viewer",

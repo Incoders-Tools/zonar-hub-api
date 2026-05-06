@@ -13,4 +13,6 @@ internal sealed class NullCurrentUser : ICurrentUser
     public Guid? UserId => null;
 
     public string? Email => null;
+
+    public Guid? OrganizationId => null;
 }

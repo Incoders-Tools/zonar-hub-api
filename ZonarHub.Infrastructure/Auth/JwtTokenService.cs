@@ -55,6 +55,7 @@ internal sealed class JwtTokenService : IJwtTokenService
     {
         UserRole.SystemAdmin => "system_admin",
         UserRole.Admin => "admin",
+        UserRole.Editor => "editor",
         UserRole.User => "user",
         UserRole.Player => "player",
         _ => "viewer",

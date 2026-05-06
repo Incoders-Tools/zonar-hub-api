@@ -1,4 +1,5 @@
 using ZonarHub.Application.Abstractions;
+using ZonarHub.Application.Features.AdminPermissions;
 using ZonarHub.Application.Features.AdminUsers.Create;
 using ZonarHub.Application.Features.AdminUsers.Delete;
 using ZonarHub.Application.Features.AdminUsers.GetAll;
@@ -20,16 +21,39 @@ internal sealed class AdminUsersTestHarness
         UserStore = new InMemoryUserStore();
         OrganizationStore = new InMemoryOrganizationStore();
         AssignmentStore = new InMemoryUserOrganizationAssignmentStore();
+        PermissionStore = new InMemoryUserOrganizationPermissionStore();
 
         Users = new InMemoryUserRepository(UserStore);
         Organizations = new InMemoryOrganizationRepository(OrganizationStore);
         Assignments = new InMemoryUserOrganizationAssignmentRepository(AssignmentStore);
+        UserPermissions = new InMemoryUserOrganizationPermissionRepository(PermissionStore);
+        PermissionCatalog = new InMemorySystemPermissionCatalogRepository();
+        PermissionService = new UserPermissionService(Assignments, UserPermissions, PermissionCatalog);
         UnitOfWork = new InMemoryUnitOfWork();
         PasswordHasher = new TestPasswordHasher();
 
-        Create = new CreateAdminUserHandler(CurrentUser, Users, Assignments, Organizations, PasswordHasher, UnitOfWork, Clock);
-        Update = new UpdateAdminUserHandler(CurrentUser, Users, Assignments, Organizations, UnitOfWork, Clock);
-        Delete = new DeleteAdminUserHandler(CurrentUser, Users, Assignments, UnitOfWork);
+        Create = new CreateAdminUserHandler(
+            CurrentUser,
+            Users,
+            Assignments,
+            UserPermissions,
+            Organizations,
+            PermissionCatalog,
+            PermissionService,
+            PasswordHasher,
+            UnitOfWork,
+            Clock);
+        Update = new UpdateAdminUserHandler(
+            CurrentUser,
+            Users,
+            Assignments,
+            UserPermissions,
+            Organizations,
+            PermissionCatalog,
+            PermissionService,
+            UnitOfWork,
+            Clock);
+        Delete = new DeleteAdminUserHandler(CurrentUser, Users, Assignments, UserPermissions, UnitOfWork);
         List = new GetAdminUsersHandler(CurrentUser, Users, Assignments, Organizations);
     }
 
@@ -39,10 +63,14 @@ internal sealed class AdminUsersTestHarness
     public InMemoryUserStore UserStore { get; }
     public InMemoryOrganizationStore OrganizationStore { get; }
     public InMemoryUserOrganizationAssignmentStore AssignmentStore { get; }
+    public InMemoryUserOrganizationPermissionStore PermissionStore { get; }
 
     public InMemoryUserRepository Users { get; }
     public InMemoryOrganizationRepository Organizations { get; }
     public InMemoryUserOrganizationAssignmentRepository Assignments { get; }
+    public InMemoryUserOrganizationPermissionRepository UserPermissions { get; }
+    public InMemorySystemPermissionCatalogRepository PermissionCatalog { get; }
+    public UserPermissionService PermissionService { get; }
     public InMemoryUnitOfWork UnitOfWork { get; }
     public TestPasswordHasher PasswordHasher { get; }
 
@@ -101,12 +129,14 @@ internal sealed class TestCurrentUser : ICurrentUser
     public bool IsAuthenticated { get; private set; }
     public Guid? UserId { get; private set; }
     public string? Email { get; private set; }
+    public Guid? OrganizationId { get; private set; }
 
-    public void Authenticate(Guid userId, string email)
+    public void Authenticate(Guid userId, string email, Guid? organizationId = null)
     {
         IsAuthenticated = true;
         UserId = userId;
         Email = email;
+        OrganizationId = organizationId;
     }
 
     public void SignOut()
@@ -114,6 +144,7 @@ internal sealed class TestCurrentUser : ICurrentUser
         IsAuthenticated = false;
         UserId = null;
         Email = null;
+        OrganizationId = null;
     }
 }
 

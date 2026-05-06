@@ -89,8 +89,15 @@ internal sealed class AdminDashboardSummaryTestHarness
             ComplexId.New(),
             organization.Id,
             name,
+            null,
             "Address",
-            location: null,
+            null,
+            null,
+            0,
+            0,
+            null,
+            null,
+            null,
             Clock.UtcNow);
 
         if (created.IsFailure)

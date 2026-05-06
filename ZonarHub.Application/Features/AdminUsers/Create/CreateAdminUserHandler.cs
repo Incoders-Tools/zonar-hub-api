@@ -1,5 +1,6 @@
 using MediatR;
 using ZonarHub.Application.Abstractions;
+using ZonarHub.Application.Features.AdminPermissions;
 using ZonarHub.Domain.Common;
 using ZonarHub.Domain.Users;
 
@@ -10,7 +11,10 @@ public sealed class CreateAdminUserHandler : IRequestHandler<CreateAdminUserComm
     private readonly ICurrentUser _currentUser;
     private readonly IUserRepository _users;
     private readonly IUserOrganizationAssignmentRepository _assignments;
+    private readonly IUserOrganizationPermissionRepository _userPermissions;
     private readonly IOrganizationRepository _organizations;
+    private readonly ISystemPermissionCatalogRepository _permissionCatalog;
+    private readonly IUserPermissionService _permissionService;
     private readonly IPasswordHasher _hasher;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IClock _clock;
@@ -19,7 +23,10 @@ public sealed class CreateAdminUserHandler : IRequestHandler<CreateAdminUserComm
         ICurrentUser currentUser,
         IUserRepository users,
         IUserOrganizationAssignmentRepository assignments,
+        IUserOrganizationPermissionRepository userPermissions,
         IOrganizationRepository organizations,
+        ISystemPermissionCatalogRepository permissionCatalog,
+        IUserPermissionService permissionService,
         IPasswordHasher hasher,
         IUnitOfWork unitOfWork,
         IClock clock)
@@ -27,7 +34,10 @@ public sealed class CreateAdminUserHandler : IRequestHandler<CreateAdminUserComm
         _currentUser = currentUser;
         _users = users;
         _assignments = assignments;
+        _userPermissions = userPermissions;
         _organizations = organizations;
+        _permissionCatalog = permissionCatalog;
+        _permissionService = permissionService;
         _hasher = hasher;
         _unitOfWork = unitOfWork;
         _clock = clock;
@@ -56,6 +66,21 @@ public sealed class CreateAdminUserHandler : IRequestHandler<CreateAdminUserComm
             return Result.Failure<AdminUserResponse>(AdminUserErrors.RoleEscalationForbidden);
         }
 
+        if (!AdminUserAuthorization.IsSystemAdmin(caller))
+        {
+            var callerOrganizationId = _currentUser.OrganizationId ?? caller.OrganizationId;
+            var canManageUsers = await _permissionService.HasToolAsync(
+                caller,
+                callerOrganizationId,
+                SystemToolKeys.Users,
+                cancellationToken);
+
+            if (!canManageUsers)
+            {
+                return Result.Failure<AdminUserResponse>(AdminUserErrors.UserToolPermissionForbidden);
+            }
+        }
+
         var email = request.Email.Trim().ToLowerInvariant();
         if (await _users.ExistsByEmailAsync(email, cancellationToken))
         {
@@ -73,6 +98,27 @@ public sealed class CreateAdminUserHandler : IRequestHandler<CreateAdminUserComm
         if (organizationScopeValidation.IsFailure)
         {
             return Result.Failure<AdminUserResponse>(organizationScopeValidation.Error);
+        }
+
+        var normalizedPermissions = NormalizePermissions(request.PermissionsByOrganization);
+        if (normalizedPermissions.Count == 0 && organizationIds.Count > 0)
+        {
+            var defaults = await _permissionService.GetDefaultToolKeysAsync(role, cancellationToken);
+            normalizedPermissions = organizationIds
+                .Select(organizationId => new AdminUserOrganizationPermissionInput(organizationId, defaults))
+                .ToList();
+        }
+
+        var permissionValidation = await ValidatePermissionAssignmentsAsync(
+            caller,
+            role,
+            organizationIds,
+            normalizedPermissions,
+            cancellationToken);
+
+        if (permissionValidation.IsFailure)
+        {
+            return Result.Failure<AdminUserResponse>(permissionValidation.Error);
         }
 
         var password = string.IsNullOrWhiteSpace(request.Password)
@@ -111,6 +157,10 @@ public sealed class CreateAdminUserHandler : IRequestHandler<CreateAdminUserComm
 
         await _users.AddAsync(user, cancellationToken);
         await _assignments.SetOrganizationIdsAsync(user.Id.Value, organizationIds, cancellationToken);
+        await _userPermissions.SetPermissionsAsync(
+            user.Id.Value,
+            ToUserOrganizationPermissions(normalizedPermissions),
+            cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var organizationNames = await ResolveOrganizationNamesAsync(organizationIds, user.OrganizationId, cancellationToken);
@@ -180,5 +230,100 @@ public sealed class CreateAdminUserHandler : IRequestHandler<CreateAdminUserComm
         }
 
         return normalized.Distinct().ToList();
+    }
+
+    private static IReadOnlyList<AdminUserOrganizationPermissionInput> NormalizePermissions(
+        IReadOnlyList<AdminUserOrganizationPermissionInput>? requested)
+    {
+        if (requested is null || requested.Count == 0)
+        {
+            return [];
+        }
+
+        var byOrganization = new Dictionary<Guid, HashSet<string>>();
+
+        foreach (var permission in requested)
+        {
+            if (permission.OrganizationId == Guid.Empty)
+            {
+                continue;
+            }
+
+            if (!byOrganization.TryGetValue(permission.OrganizationId, out var toolSet))
+            {
+                toolSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                byOrganization[permission.OrganizationId] = toolSet;
+            }
+
+            foreach (var key in permission.ToolKeys)
+            {
+                var normalized = key?.Trim().ToLowerInvariant();
+                if (!string.IsNullOrWhiteSpace(normalized))
+                {
+                    toolSet.Add(normalized);
+                }
+            }
+        }
+
+        return byOrganization
+            .Select(entry => new AdminUserOrganizationPermissionInput(entry.Key, entry.Value.ToList()))
+            .ToList();
+    }
+
+    private async Task<Result> ValidatePermissionAssignmentsAsync(
+        User caller,
+        UserRole targetRole,
+        IReadOnlyList<Guid> organizationIds,
+        IReadOnlyList<AdminUserOrganizationPermissionInput> permissionsByOrganization,
+        CancellationToken cancellationToken)
+    {
+        if (permissionsByOrganization.Count == 0)
+        {
+            return Result.Success();
+        }
+
+        var validOrganizationIds = new HashSet<Guid>(organizationIds);
+        if (permissionsByOrganization.Any(permission => !validOrganizationIds.Contains(permission.OrganizationId)))
+        {
+            return Result.Failure(AdminUserErrors.PermissionOrganizationScopeInvalid);
+        }
+
+        var requestedToolKeys = permissionsByOrganization
+            .SelectMany(permission => permission.ToolKeys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (requestedToolKeys.Count == 0)
+        {
+            return Result.Success();
+        }
+
+        var tools = await _permissionCatalog.ListToolsByKeysAsync(requestedToolKeys, cancellationToken);
+        if (tools.Count != requestedToolKeys.Count || tools.Any(tool => !tool.IsActive))
+        {
+            return Result.Failure(AdminUserErrors.PermissionToolInvalid);
+        }
+
+        var restrictedToolsRequested = tools.Any(tool => tool.IsSystemAdminOnly);
+        if (restrictedToolsRequested && targetRole != UserRole.SystemAdmin)
+        {
+            return Result.Failure(AdminUserErrors.RestrictedToolRoleInvalid);
+        }
+
+        if (restrictedToolsRequested && !AdminUserAuthorization.IsSystemAdmin(caller))
+        {
+            return Result.Failure(AdminUserErrors.RestrictedToolAssignmentForbidden);
+        }
+
+        return Result.Success();
+    }
+
+    private static IReadOnlyList<UserOrganizationPermission> ToUserOrganizationPermissions(
+        IReadOnlyList<AdminUserOrganizationPermissionInput> permissionsByOrganization)
+    {
+        return permissionsByOrganization
+            .SelectMany(permission => permission.ToolKeys.Select(toolKey =>
+                new UserOrganizationPermission(permission.OrganizationId, toolKey)))
+            .ToList();
     }
 }

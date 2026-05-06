@@ -38,4 +38,16 @@ public sealed class InMemoryComplexRepository : IComplexRepository
 
         return Task.CompletedTask;
     }
+
+    public Task UpdateAsync(Complex complex, CancellationToken cancellationToken = default)
+    {
+        _store.Data[complex.Id] = complex;
+        return Task.CompletedTask;
+    }
+
+    public Task<bool> DeleteAsync(ComplexId id, CancellationToken cancellationToken = default)
+    {
+        var removed = _store.Data.TryRemove(id, out _);
+        return Task.FromResult(removed);
+    }
 }

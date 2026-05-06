@@ -7,4 +7,5 @@ public enum UserRole
     User = 2,
     Player = 3,
     Viewer = 4,
+    Editor = 5,
 }

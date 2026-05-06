@@ -12,8 +12,15 @@ public sealed class Complex : Entity<ComplexId>
 
     public OrganizationId OrganizationId { get; private set; }
     public string Name { get; private set; } = string.Empty;
+    public string? Key { get; private set; }
     public string Address { get; private set; } = string.Empty;
     public string? Location { get; private set; }
+    public string? Description { get; private set; }
+    public int SortOrder { get; private set; }
+    public int Preponderance { get; private set; }
+    public string? LogoImagePath { get; private set; }
+    public string? CoverImagePath { get; private set; }
+    public string? LayoutDiagramPath { get; private set; }
     public bool IsActive { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
     public DateTime UpdatedAtUtc { get; private set; }
@@ -22,8 +29,15 @@ public sealed class Complex : Entity<ComplexId>
         ComplexId id,
         OrganizationId organizationId,
         string name,
+        string? key,
         string address,
         string? location,
+        string? description,
+        int sortOrder,
+        int preponderance,
+        string? logoImagePath,
+        string? coverImagePath,
+        string? layoutDiagramPath,
         bool isActive,
         DateTime createdAtUtc,
         DateTime updatedAtUtc)
@@ -32,8 +46,15 @@ public sealed class Complex : Entity<ComplexId>
         {
             OrganizationId = organizationId,
             Name = name,
+            Key = key,
             Address = address,
             Location = location,
+            Description = description,
+            SortOrder = sortOrder,
+            Preponderance = preponderance,
+            LogoImagePath = logoImagePath,
+            CoverImagePath = coverImagePath,
+            LayoutDiagramPath = layoutDiagramPath,
             IsActive = isActive,
             CreatedAtUtc = createdAtUtc,
             UpdatedAtUtc = updatedAtUtc,
@@ -44,8 +65,15 @@ public sealed class Complex : Entity<ComplexId>
         ComplexId id,
         OrganizationId organizationId,
         string name,
+        string? key,
         string address,
         string? location,
+        string? description,
+        int sortOrder,
+        int preponderance,
+        string? logoImagePath,
+        string? coverImagePath,
+        string? layoutDiagramPath,
         DateTime nowUtc)
     {
         if (organizationId.Value == Guid.Empty)
@@ -61,8 +89,15 @@ public sealed class Complex : Entity<ComplexId>
         {
             OrganizationId = organizationId,
             Name = name.Trim(),
+            Key = string.IsNullOrWhiteSpace(key) ? null : key.Trim(),
             Address = address.Trim(),
             Location = string.IsNullOrWhiteSpace(location) ? null : location.Trim(),
+            Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
+            SortOrder = sortOrder,
+            Preponderance = preponderance,
+            LogoImagePath = logoImagePath,
+            CoverImagePath = coverImagePath,
+            LayoutDiagramPath = layoutDiagramPath,
             IsActive = true,
             CreatedAtUtc = nowUtc,
             UpdatedAtUtc = nowUtc,

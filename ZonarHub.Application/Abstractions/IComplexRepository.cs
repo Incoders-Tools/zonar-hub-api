@@ -12,4 +12,6 @@ public interface IComplexRepository
         CancellationToken cancellationToken = default);
 
     Task AddAsync(Complex complex, CancellationToken cancellationToken = default);
+    Task UpdateAsync(Complex complex, CancellationToken cancellationToken = default);
+    Task<bool> DeleteAsync(ComplexId id, CancellationToken cancellationToken = default);
 }

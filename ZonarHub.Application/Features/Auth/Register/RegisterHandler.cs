@@ -136,7 +136,7 @@ public sealed class RegisterHandler : IRequestHandler<RegisterCommand, Result<Au
                 user.Id.Value.ToString(),
                 user.Email,
                 user.FullName,
-                "role_admin",
+                "role002",
                 "admin",
                 user.IsActive,
                 user.CreatedAtUtc.ToString("o"),

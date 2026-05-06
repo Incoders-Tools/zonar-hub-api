@@ -7,6 +7,8 @@ using ZonarHub.Application.Features.Auth.Login;
 using ZonarHub.Application.Features.Auth.Register;
 using ZonarHub.Application.Features.Auth.ResetPassword;
 using ZonarHub.Application.Features.Auth.SendVerificationCode;
+using ZonarHub.Application.Features.AdminPermissions;
+using ZonarHub.Application.Features.AdminPermissions.GetEffective;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -52,6 +54,14 @@ public static class AuthEndpointsExtensions
         group.MapGet("/check-phone", CheckPhoneAsync)
             .WithName("CheckPhone")
             .AllowAnonymous();
+
+        group.MapGet("/me/effective-permissions", GetEffectivePermissionsAsync)
+            .WithName("GetEffectivePermissions")
+            .WithSummary("Get effective tool permissions for current user")
+            .WithDescription("Returns effective tool keys for the authenticated user in the requested or active organization context.")
+            .Produces<EffectivePermissionsResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .RequireAuthorization();
 
         return app;
     }
@@ -138,6 +148,15 @@ public static class AuthEndpointsExtensions
     {
         var result = await sender.Send(new CheckPhoneQuery(phone), cancellationToken);
         return result.Match(exists => (IResult)TypedResults.Ok(new { exists }));
+    }
+
+    private static async Task<IResult> GetEffectivePermissionsAsync(
+        [FromQuery] Guid? organizationId,
+        ISender sender,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new GetEffectivePermissionsQuery(organizationId), cancellationToken);
+        return result.Match(response => (IResult)TypedResults.Ok(response));
     }
 }
 

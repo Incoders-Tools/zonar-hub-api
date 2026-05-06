@@ -10,17 +10,20 @@ public sealed class DeleteAdminUserHandler : IRequestHandler<DeleteAdminUserComm
     private readonly ICurrentUser _currentUser;
     private readonly IUserRepository _users;
     private readonly IUserOrganizationAssignmentRepository _assignments;
+    private readonly IUserOrganizationPermissionRepository _userPermissions;
     private readonly IUnitOfWork _unitOfWork;
 
     public DeleteAdminUserHandler(
         ICurrentUser currentUser,
         IUserRepository users,
         IUserOrganizationAssignmentRepository assignments,
+        IUserOrganizationPermissionRepository userPermissions,
         IUnitOfWork unitOfWork)
     {
         _currentUser = currentUser;
         _users = users;
         _assignments = assignments;
+        _userPermissions = userPermissions;
         _unitOfWork = unitOfWork;
     }
 
@@ -54,6 +57,7 @@ public sealed class DeleteAdminUserHandler : IRequestHandler<DeleteAdminUserComm
         }
 
         await _assignments.RemoveByUserIdAsync(user.Id.Value, cancellationToken);
+        await _userPermissions.RemoveByUserIdAsync(user.Id.Value, cancellationToken);
         await _users.RemoveAsync(user.Id, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 

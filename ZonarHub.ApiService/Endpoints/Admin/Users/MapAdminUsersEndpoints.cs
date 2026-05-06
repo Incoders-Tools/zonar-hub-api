@@ -29,7 +29,7 @@ public static class AdminUsersEndpointsExtensions
         group.MapPost("/", CreateAsync)
             .WithName("CreateAdminUser")
             .WithSummary("Create a managed user")
-            .WithDescription("Creates an administrative user and persists organization assignments when provided.")
+            .WithDescription("Creates an administrative user and persists organization assignments and per-organization tool permissions when provided.")
             .Produces<AdminUserResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -39,7 +39,7 @@ public static class AdminUsersEndpointsExtensions
         group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateAdminUser")
             .WithSummary("Update a managed user")
-            .WithDescription("Updates profile, role, activation, and organization assignments for a managed user.")
+            .WithDescription("Updates profile, role, activation, organization assignments, and per-organization tool permissions for a managed user.")
             .Produces<AdminUserResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -49,7 +49,7 @@ public static class AdminUsersEndpointsExtensions
         group.MapDelete("/{id:guid}", DeleteAsync)
             .WithName("DeleteAdminUser")
             .WithSummary("Delete a managed user")
-            .WithDescription("Deletes a managed user and removes all organization assignment links.")
+            .WithDescription("Deletes a managed user and removes all organization assignment and tool permission links.")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -85,6 +85,8 @@ public static class AdminUsersEndpointsExtensions
             body.RoleId,
             body.OrganizationId,
             body.TenantIds,
+            body.PermissionsByOrganization?.Select(permission =>
+                new AdminUserOrganizationPermissionInput(permission.OrganizationId, permission.ToolKeys)).ToList(),
             body.Password);
 
         var result = await sender.Send(command, cancellationToken);
@@ -104,6 +106,8 @@ public static class AdminUsersEndpointsExtensions
             body.RoleId,
             body.OrganizationId,
             body.TenantIds,
+            body.PermissionsByOrganization?.Select(permission =>
+                new AdminUserOrganizationPermissionInput(permission.OrganizationId, permission.ToolKeys)).ToList(),
             body.IsActive);
 
         var result = await sender.Send(command, cancellationToken);
@@ -127,6 +131,7 @@ public sealed record CreateAdminUserRequest(
     string RoleId,
     Guid? OrganizationId,
     IReadOnlyList<Guid>? TenantIds,
+    IReadOnlyList<OrganizationPermissionAssignmentRequest>? PermissionsByOrganization,
     string? Password);
 
 public sealed record UpdateAdminUserRequest(
@@ -135,4 +140,9 @@ public sealed record UpdateAdminUserRequest(
     string? RoleId,
     Guid? OrganizationId,
     IReadOnlyList<Guid>? TenantIds,
+    IReadOnlyList<OrganizationPermissionAssignmentRequest>? PermissionsByOrganization,
     bool? IsActive);
+
+public sealed record OrganizationPermissionAssignmentRequest(
+    Guid OrganizationId,
+    IReadOnlyList<string> ToolKeys);

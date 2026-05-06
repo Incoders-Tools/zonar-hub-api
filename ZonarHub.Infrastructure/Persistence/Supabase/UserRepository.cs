@@ -182,7 +182,7 @@ internal sealed class UserRepository : IUserRepository
             row.Phone,
             row.BirthDate,
             row.PasswordHash,
-            ParseRole(row.Role),
+            ParseRole(row.Role, row.RoleId),
             row.TenantId,
             row.OrganizationId,
             row.AvatarUrl,
@@ -212,6 +212,7 @@ internal sealed class UserRepository : IUserRepository
         user.AvatarUrl,
         user.Locale,
         user.DateFormat,
+        ToStorageRoleId(user.Role),
         user.IsEmailVerified,
         user.IsActive,
         user.CreatedAtUtc,
@@ -235,6 +236,7 @@ internal sealed class UserRepository : IUserRepository
         user.AvatarUrl,
         user.Locale,
         user.DateFormat,
+        ToStorageRoleId(user.Role),
         user.IsEmailVerified,
         user.IsActive,
         user.UpdatedAtUtc,
@@ -258,22 +260,55 @@ internal sealed class UserRepository : IUserRepository
             .Trim();
     }
 
-    private static UserRole ParseRole(string value) => value.ToLowerInvariant() switch
+    private static UserRole ParseRole(string value, string? roleId)
     {
-        "system_admin" => UserRole.SystemAdmin,
-        "admin" => UserRole.Admin,
-        "user" => UserRole.User,
-        "player" => UserRole.Player,
-        _ => UserRole.Viewer,
-    };
+        var parsedByName = value.ToLowerInvariant() switch
+        {
+            "system_admin" => UserRole.SystemAdmin,
+            "admin" => UserRole.Admin,
+            "editor" => UserRole.Editor,
+            "user" => UserRole.User,
+            "player" => UserRole.Player,
+            "viewer" => UserRole.Viewer,
+            _ => (UserRole?)null,
+        };
+
+        if (parsedByName.HasValue)
+        {
+            return parsedByName.Value;
+        }
+
+        return (roleId ?? string.Empty).Trim().ToLowerInvariant() switch
+        {
+            "role001" => UserRole.SystemAdmin,
+            "role002" => UserRole.Admin,
+            "role003" => UserRole.Viewer,
+            "role004" => UserRole.Editor,
+            "role005" => UserRole.User,
+            "role006" => UserRole.Player,
+            _ => UserRole.Viewer,
+        };
+    }
 
     private static string ToStorageRole(UserRole role) => role switch
     {
         UserRole.SystemAdmin => "system_admin",
         UserRole.Admin => "admin",
+        UserRole.Editor => "editor",
         UserRole.User => "user",
         UserRole.Player => "player",
         _ => "viewer",
+    };
+
+    private static string ToStorageRoleId(UserRole role) => role switch
+    {
+        UserRole.SystemAdmin => "role001",
+        UserRole.Admin => "role002",
+        UserRole.Viewer => "role003",
+        UserRole.Editor => "role004",
+        UserRole.User => "role005",
+        UserRole.Player => "role006",
+        _ => "role003",
     };
 
     private sealed record UserExistsRow([property: JsonPropertyName("id")] Guid Id);
@@ -291,6 +326,7 @@ internal sealed class UserRepository : IUserRepository
         [property: JsonPropertyName("avatar_url")] string? AvatarUrl,
         [property: JsonPropertyName("locale")] string? Locale,
         [property: JsonPropertyName("date_format")] string? DateFormat,
+        [property: JsonPropertyName("role_id")] string? RoleId,
         [property: JsonPropertyName("is_email_verified")] bool IsEmailVerified,
         [property: JsonPropertyName("is_active")] bool IsActive,
         [property: JsonPropertyName("created_at_utc")] DateTime CreatedAtUtc,
@@ -314,6 +350,7 @@ internal sealed class UserRepository : IUserRepository
         [property: JsonPropertyName("avatar_url")] string? AvatarUrl,
         [property: JsonPropertyName("locale")] string? Locale,
         [property: JsonPropertyName("date_format")] string? DateFormat,
+        [property: JsonPropertyName("role_id")] string? RoleId,
         [property: JsonPropertyName("is_email_verified")] bool IsEmailVerified,
         [property: JsonPropertyName("is_active")] bool IsActive,
         [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc,

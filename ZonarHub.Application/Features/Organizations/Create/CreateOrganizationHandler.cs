@@ -9,15 +9,21 @@ public sealed class CreateOrganizationHandler
     : IRequestHandler<CreateOrganizationCommand, Result<OrganizationResponse>>
 {
     private readonly IOrganizationRepository _organizations;
+    private readonly IUserRepository _users;
+    private readonly IUserOrganizationAssignmentRepository _assignments;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IClock _clock;
 
     public CreateOrganizationHandler(
         IOrganizationRepository organizations,
+        IUserRepository users,
+        IUserOrganizationAssignmentRepository assignments,
         IUnitOfWork unitOfWork,
         IClock clock)
     {
         _organizations = organizations;
+        _users = users;
+        _assignments = assignments;
         _unitOfWork = unitOfWork;
         _clock = clock;
     }
@@ -53,6 +59,38 @@ public sealed class CreateOrganizationHandler
         }
 
         await _organizations.AddAsync(created.Value, cancellationToken);
+
+        var creator = await _users.GetByIdAsync(new ZonarHub.Domain.Users.UserId(request.CreatedByUserId), cancellationToken);
+        if (creator is not null)
+        {
+            var assignmentIds = (await _assignments.GetOrganizationIdsByUserIdAsync(creator.Id.Value, cancellationToken))
+                .Where(id => id != Guid.Empty)
+                .ToList();
+
+            if (creator.OrganizationId is { } currentPrimary && !assignmentIds.Contains(currentPrimary))
+            {
+                assignmentIds.Insert(0, currentPrimary);
+            }
+
+            if (!assignmentIds.Contains(created.Value.Id.Value))
+            {
+                assignmentIds.Add(created.Value.Id.Value);
+            }
+
+            await _assignments.SetOrganizationIdsAsync(creator.Id.Value, assignmentIds, cancellationToken);
+
+            if (creator.OrganizationId is null)
+            {
+                var assignPrimary = creator.AssignOrganization(created.Value.Id.Value, _clock.UtcNow);
+                if (assignPrimary.IsFailure)
+                {
+                    return Result.Failure<OrganizationResponse>(assignPrimary.Error);
+                }
+
+                _users.Update(creator);
+            }
+        }
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result.Success(OrganizationResponse.FromDomain(created.Value));

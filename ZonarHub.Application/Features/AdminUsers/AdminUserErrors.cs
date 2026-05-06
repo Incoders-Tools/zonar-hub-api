@@ -35,4 +35,24 @@ public static class AdminUserErrors
     public static readonly Error OrganizationScopeInvalid = Error.Validation(
         "admin_users.organization_scope_invalid",
         "admin.users.errors.organization_scope_invalid");
+
+    public static readonly Error UserToolPermissionForbidden = Error.Failure(
+        "admin_users.user_tool_permission_forbidden",
+        "admin.users.errors.user_tool_permission_forbidden");
+
+    public static readonly Error PermissionOrganizationScopeInvalid = Error.Validation(
+        "admin_users.permission_organization_scope_invalid",
+        "admin.users.errors.permission_organization_scope_invalid");
+
+    public static readonly Error PermissionToolInvalid = Error.Validation(
+        "admin_users.permission_tool_invalid",
+        "admin.users.errors.permission_tool_invalid");
+
+    public static readonly Error RestrictedToolRoleInvalid = Error.Validation(
+        "admin_users.restricted_tool_role_invalid",
+        "admin.users.errors.restricted_tool_role_invalid");
+
+    public static readonly Error RestrictedToolAssignmentForbidden = Error.Failure(
+        "admin_users.restricted_tool_assignment_forbidden",
+        "admin.users.errors.restricted_tool_assignment_forbidden");
 }

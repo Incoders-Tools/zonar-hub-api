@@ -181,7 +181,8 @@ public sealed class CompleteOnboardingHandler
         if (request.Venue is { } venue)
         {
             var complexResult = Complex.Create(
-                ComplexId.New(), org.Id, venue.Name, venue.Address, venue.Location, now);
+                ComplexId.New(), org.Id, venue.Name, null, venue.Address, venue.Location,
+                null, 0, 0, null, null, null, now);
 
             if (complexResult.IsFailure)
                 return Result.Failure<CompleteOnboardingResponse>(complexResult.Error);
