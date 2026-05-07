@@ -19,7 +19,7 @@ public sealed class GetTournamentModalitiesHandler
         GetTournamentModalitiesQuery request,
         CancellationToken cancellationToken)
     {
-        var items = await _modalities.GetAllActiveAsync(cancellationToken);
+        var items = await _modalities.GetAllAsync(request.IncludeInactive, cancellationToken);
 
         IReadOnlyList<TournamentModalityResponse> result = items
             .Select(m => new TournamentModalityResponse(m.Id, m.NameEs, m.NameEn, m.NamePt, m.Key, m.SortOrder, m.IsActive))
