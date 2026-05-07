@@ -18,6 +18,14 @@ public sealed class InMemoryTenantRepository : ITenantRepository
         return Task.FromResult(tenant);
     }
 
+    public Task<Tenant?> GetByContactEmailAsync(string contactEmail, CancellationToken cancellationToken = default)
+    {
+        var normalized = contactEmail.Trim().ToLowerInvariant();
+        var match = _store.Data.Values.FirstOrDefault(t =>
+            string.Equals(t.ContactEmail, normalized, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(match);
+    }
+
     public Task AddAsync(Tenant tenant, CancellationToken cancellationToken = default)
     {
         if (!_store.Data.TryAdd(tenant.Id, tenant))

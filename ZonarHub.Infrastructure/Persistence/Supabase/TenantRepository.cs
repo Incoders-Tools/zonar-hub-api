@@ -26,6 +26,15 @@ internal sealed class TenantRepository : ITenantRepository
         return row is null ? null : ToDomain(row);
     }
 
+    public async Task<Tenant?> GetByContactEmailAsync(string contactEmail, CancellationToken cancellationToken = default)
+    {
+        var escaped = Uri.EscapeDataString(contactEmail.Trim().ToLowerInvariant());
+        var url = $"{RestPath}?select=*&contact_email=eq.{escaped}&limit=1";
+        var rows = await _http.GetFromJsonAsync<List<TenantRow>>(url, cancellationToken);
+        var row = rows?.FirstOrDefault();
+        return row is null ? null : ToDomain(row);
+    }
+
     public Task AddAsync(Tenant tenant, CancellationToken cancellationToken = default)
     {
         var row = ToRow(tenant);

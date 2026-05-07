@@ -71,14 +71,20 @@ public sealed class RegisterHandler : IRequestHandler<RegisterCommand, Result<Au
 
         var tenantName = request.FullName.Trim();
 
-        var tenantResult = Tenant.Create(
-            TenantId.New(), tenantName, key: string.Empty, emailLower, TenantPlanType.Starter, now);
+        // Check for an orphaned tenant (created in a previous failed registration attempt).
+        // If found, reuse it instead of attempting a new insert that would fail with 409.
+        var tenant = await _tenants.GetByContactEmailAsync(emailLower, cancellationToken);
+        if (tenant is null)
+        {
+            var tenantResult = Tenant.Create(
+                TenantId.New(), tenantName, key: string.Empty, emailLower, TenantPlanType.Starter, now);
 
-        if (tenantResult.IsFailure)
-            return Result.Failure<AuthResponse>(tenantResult.Error);
+            if (tenantResult.IsFailure)
+                return Result.Failure<AuthResponse>(tenantResult.Error);
 
-        var tenant = tenantResult.Value;
-        await _tenants.AddAsync(tenant, cancellationToken);
+            tenant = tenantResult.Value;
+            await _tenants.AddAsync(tenant, cancellationToken);
+        }
 
         // Create user
         DateOnly? birthDate = null;

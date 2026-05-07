@@ -1,6 +1,7 @@
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Application.Features.Auth.CheckCode;
 using ZonarHub.Application.Features.Auth.Register;
+using ZonarHub.Domain.Tenants;
 using ZonarHub.Domain.Users;
 using ZonarHub.Infrastructure.Auth;
 using ZonarHub.Infrastructure.Caching;
@@ -12,6 +13,39 @@ namespace ZonarHub.Tests.Application.Auth;
 public sealed class AuthRegistrationTests
 {
     private static readonly DateTime Now = new(2026, 5, 1, 4, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public async Task Register_WhenOrphanedTenantExists_ReusesItAndSucceeds()
+    {
+        // Arrange: simulate a previous failed registration that left an orphaned tenant
+        var h = new AuthTestHarness(Now);
+        var orphanedTenantResult = Tenant.Create(
+            TenantId.New(), "Nicolas Morales", string.Empty, "nm@gmail.com", TenantPlanType.Starter, Now);
+        Assert.True(orphanedTenantResult.IsSuccess);
+        await h.Tenants.AddAsync(orphanedTenantResult.Value, CancellationToken.None);
+
+        // Act: register with the same email (no user exists, but tenant does)
+        var result = await h.Register.Handle(
+            new RegisterCommand(
+                "Nicolas Morales",
+                "nm@gmail.com",
+                "Password123!",
+                null,
+                null,
+                "451499"),
+            CancellationToken.None);
+
+        // Assert: registration succeeds by reusing the orphaned tenant
+        Assert.True(result.IsSuccess);
+        Assert.Equal("nm@gmail.com", result.Value.User.Email);
+
+        var persisted = await h.Users.GetByEmailAsync("nm@gmail.com", CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.True(persisted!.IsEmailVerified);
+
+        // The orphaned tenant's ID should be reused
+        Assert.Equal(orphanedTenantResult.Value.Id.Value.ToString(), result.Value.Tenant?.Id);
+    }
 
     [Fact]
     public async Task Register_WithMasterBypassCode_AllowsRegistrationWithoutCachedCode()
@@ -106,7 +140,7 @@ public sealed class AuthRegistrationTests
         public AuthTestHarness(DateTime nowUtc)
         {
             Users = new InMemoryUserRepository(new InMemoryUserStore());
-            var tenants = new InMemoryTenantRepository(new InMemoryTenantStore());
+            Tenants = new InMemoryTenantRepository(new InMemoryTenantStore());
             var hasher = new PasswordHasher();
             var jwt = new StubJwtTokenService(nowUtc.AddMinutes(30));
             var cache = new MemoryCacheStore(TimeProvider.System);
@@ -115,10 +149,11 @@ public sealed class AuthRegistrationTests
             var uow = new InMemoryUnitOfWork();
             var clock = new TestClock(nowUtc);
 
-            Register = new RegisterHandler(Users, tenants, hasher, jwt, cache, email, templates, uow, clock);
+            Register = new RegisterHandler(Users, Tenants, hasher, jwt, cache, email, templates, uow, clock);
         }
 
         public InMemoryUserRepository Users { get; }
+        public InMemoryTenantRepository Tenants { get; }
         public RegisterHandler Register { get; }
     }
 
