@@ -4,8 +4,12 @@ using ZonarHub.Domain.Common;
 namespace ZonarHub.Application.Features.TournamentStatuses.Create;
 
 public sealed record CreateTournamentStatusCommand(
-    string Name,
     string Key,
-    string? Description,
+    string NameEs,
+    string NameEn,
+    string NamePt,
+    string? DescriptionEs,
+    string? DescriptionEn,
+    string? DescriptionPt,
     int SortOrder)
     : IRequest<Result<TournamentStatusResponse>>;

@@ -12,19 +12,17 @@ internal sealed class TournamentStatusesTestHarness
 {
     public TournamentStatusesTestHarness(DateTime nowUtc)
     {
-        Store = new InMemorySystemSettingStore();
-        var settings = new InMemorySystemSettingRepository(Store);
-        var unitOfWork = new InMemoryUnitOfWork();
+        Repository = new InMemoryTournamentStatusRepository();
         Clock = new TestClock(nowUtc);
 
-        GetAll = new GetTournamentStatusesHandler(settings, Clock);
-        GetById = new GetTournamentStatusByIdHandler(settings, Clock);
-        Create = new CreateTournamentStatusHandler(settings, unitOfWork, Clock);
-        Update = new UpdateTournamentStatusHandler(settings, unitOfWork, Clock);
-        Delete = new DeleteTournamentStatusHandler(settings, unitOfWork, Clock);
+        GetAll = new GetTournamentStatusesHandler(Repository);
+        GetById = new GetTournamentStatusByIdHandler(Repository);
+        Create = new CreateTournamentStatusHandler(Repository, Clock);
+        Update = new UpdateTournamentStatusHandler(Repository, Clock);
+        Delete = new DeleteTournamentStatusHandler(Repository);
     }
 
-    public InMemorySystemSettingStore Store { get; }
+    public InMemoryTournamentStatusRepository Repository { get; }
     public TestClock Clock { get; }
     public GetTournamentStatusesHandler GetAll { get; }
     public GetTournamentStatusByIdHandler GetById { get; }

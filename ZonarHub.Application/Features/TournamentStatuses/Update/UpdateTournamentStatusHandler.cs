@@ -7,17 +7,14 @@ namespace ZonarHub.Application.Features.TournamentStatuses.Update;
 public sealed class UpdateTournamentStatusHandler
     : IRequestHandler<UpdateTournamentStatusCommand, Result<TournamentStatusResponse>>
 {
-    private readonly ISystemSettingRepository _settings;
-    private readonly IUnitOfWork _unitOfWork;
+    private readonly ITournamentStatusRepository _statuses;
     private readonly IClock _clock;
 
     public UpdateTournamentStatusHandler(
-        ISystemSettingRepository settings,
-        IUnitOfWork unitOfWork,
+        ITournamentStatusRepository statuses,
         IClock clock)
     {
-        _settings = settings;
-        _unitOfWork = unitOfWork;
+        _statuses = statuses;
         _clock = clock;
     }
 
@@ -25,54 +22,42 @@ public sealed class UpdateTournamentStatusHandler
         UpdateTournamentStatusCommand request,
         CancellationToken cancellationToken)
     {
-        var name = request.Name.Trim();
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return Result.Failure<TournamentStatusResponse>(TournamentStatusCatalogErrors.NameRequired);
-        }
-
-        var (setting, items) = await TournamentStatusCatalogStore.LoadAsync(_settings, _clock, cancellationToken);
-        var index = items.FindIndex(item => string.Equals(item.Id, request.Id, StringComparison.OrdinalIgnoreCase));
-        if (index < 0)
+        var current = await _statuses.GetByIdAsync(request.Id, cancellationToken);
+        if (current is null)
         {
             return Result.Failure<TournamentStatusResponse>(TournamentStatusCatalogErrors.NotFound);
         }
 
-        var current = items[index];
+        // Patch semantics: only the locales the caller sent get overwritten.
+        // Empty / whitespace strings preserve the previous value so an admin
+        // editing only their active locale doesn't blank the others.
+        var nameEs = NonBlankOrFallback(request.NameEs, current.NameEs);
+        var nameEn = NonBlankOrFallback(request.NameEn, current.NameEn);
+        var namePt = NonBlankOrFallback(request.NamePt, current.NamePt);
 
-        var duplicateName = items.Any(item =>
-            !string.Equals(item.Id, current.Id, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase));
-
-        if (duplicateName)
+        var dto = current with
         {
-            return Result.Failure<TournamentStatusResponse>(TournamentStatusCatalogErrors.NameAlreadyExists);
-        }
-
-        var updated = current with
-        {
-            Name = name,
-            Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+            NameEs = nameEs,
+            NameEn = nameEn,
+            NamePt = namePt,
+            DescriptionEs = NullIfBlankPreserve(request.DescriptionEs, current.DescriptionEs),
+            DescriptionEn = NullIfBlankPreserve(request.DescriptionEn, current.DescriptionEn),
+            DescriptionPt = NullIfBlankPreserve(request.DescriptionPt, current.DescriptionPt),
             SortOrder = request.SortOrder,
             IsActive = request.IsActive,
             UpdatedAt = _clock.UtcNow
         };
 
-        items[index] = updated;
+        var updated = await _statuses.UpdateAsync(dto, cancellationToken);
+        return Result.Success(TournamentStatusMapper.ToResponse(updated));
+    }
 
-        var saved = await TournamentStatusCatalogStore.SaveAsync(
-            items,
-            setting,
-            _settings,
-            _unitOfWork,
-            _clock,
-            cancellationToken);
+    private static string NonBlankOrFallback(string? incoming, string fallback)
+        => string.IsNullOrWhiteSpace(incoming) ? fallback : incoming.Trim();
 
-        if (saved.IsFailure)
-        {
-            return Result.Failure<TournamentStatusResponse>(saved.Error);
-        }
-
-        return Result.Success(updated.ToResponse());
+    private static string? NullIfBlankPreserve(string? incoming, string? fallback)
+    {
+        if (incoming is null) return fallback;
+        return string.IsNullOrWhiteSpace(incoming) ? null : incoming.Trim();
     }
 }

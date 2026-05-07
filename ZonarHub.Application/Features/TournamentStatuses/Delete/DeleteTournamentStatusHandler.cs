@@ -7,45 +7,24 @@ namespace ZonarHub.Application.Features.TournamentStatuses.Delete;
 public sealed class DeleteTournamentStatusHandler
     : IRequestHandler<DeleteTournamentStatusCommand, Result>
 {
-    private readonly ISystemSettingRepository _settings;
-    private readonly IUnitOfWork _unitOfWork;
-    private readonly IClock _clock;
+    private readonly ITournamentStatusRepository _statuses;
 
-    public DeleteTournamentStatusHandler(
-        ISystemSettingRepository settings,
-        IUnitOfWork unitOfWork,
-        IClock clock)
+    public DeleteTournamentStatusHandler(ITournamentStatusRepository statuses)
     {
-        _settings = settings;
-        _unitOfWork = unitOfWork;
-        _clock = clock;
+        _statuses = statuses;
     }
 
     public async Task<Result> Handle(
         DeleteTournamentStatusCommand request,
         CancellationToken cancellationToken)
     {
-        var (setting, items) = await TournamentStatusCatalogStore.LoadAsync(_settings, _clock, cancellationToken);
-        var removed = items.RemoveAll(item => string.Equals(item.Id, request.Id, StringComparison.OrdinalIgnoreCase));
-
-        if (removed == 0)
+        var current = await _statuses.GetByIdAsync(request.Id, cancellationToken);
+        if (current is null)
         {
             return Result.Failure(TournamentStatusCatalogErrors.NotFound);
         }
 
-        var saved = await TournamentStatusCatalogStore.SaveAsync(
-            items,
-            setting,
-            _settings,
-            _unitOfWork,
-            _clock,
-            cancellationToken);
-
-        if (saved.IsFailure)
-        {
-            return Result.Failure(saved.Error);
-        }
-
+        await _statuses.DeleteAsync(request.Id, cancellationToken);
         return Result.Success();
     }
 }

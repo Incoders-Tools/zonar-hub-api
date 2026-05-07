@@ -10,10 +10,9 @@ internal sealed class UpdateTournamentStatusValidator : AbstractValidator<Update
             .NotEmpty()
             .WithMessage("tournament_statuses.errors.id_required");
 
-        RuleFor(x => x.Name)
-            .NotEmpty()
-            .WithMessage("tournament_statuses.errors.name_required")
-            .MaximumLength(120);
+        RuleFor(x => x.NameEs).MaximumLength(120);
+        RuleFor(x => x.NameEn).MaximumLength(120);
+        RuleFor(x => x.NamePt).MaximumLength(120);
 
         RuleFor(x => x.SortOrder)
             .GreaterThanOrEqualTo(0)

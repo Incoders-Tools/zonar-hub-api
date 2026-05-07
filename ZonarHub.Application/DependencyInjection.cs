@@ -3,7 +3,6 @@ using FluentValidation;
 using ZonarHub.Application.Common;
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Application.Features.AdminPermissions;
-using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ZonarHub.Application;

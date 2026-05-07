@@ -1,6 +1,5 @@
 using MediatR;
 using ZonarHub.Application.Abstractions;
-using ZonarHub.Application.Features.TournamentModalities;
 using ZonarHub.Domain.Common;
 
 namespace ZonarHub.Application.Features.TournamentModalities.GetAll;

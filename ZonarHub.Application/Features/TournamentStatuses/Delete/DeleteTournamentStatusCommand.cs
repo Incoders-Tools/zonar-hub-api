@@ -3,5 +3,4 @@ using ZonarHub.Domain.Common;
 
 namespace ZonarHub.Application.Features.TournamentStatuses.Delete;
 
-public sealed record DeleteTournamentStatusCommand(string Id)
-    : IRequest<Result>;
+public sealed record DeleteTournamentStatusCommand(Guid Id) : IRequest<Result>;

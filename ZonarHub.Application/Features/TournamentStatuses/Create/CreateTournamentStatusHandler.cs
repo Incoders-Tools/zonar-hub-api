@@ -7,17 +7,14 @@ namespace ZonarHub.Application.Features.TournamentStatuses.Create;
 public sealed class CreateTournamentStatusHandler
     : IRequestHandler<CreateTournamentStatusCommand, Result<TournamentStatusResponse>>
 {
-    private readonly ISystemSettingRepository _settings;
-    private readonly IUnitOfWork _unitOfWork;
+    private readonly ITournamentStatusRepository _statuses;
     private readonly IClock _clock;
 
     public CreateTournamentStatusHandler(
-        ISystemSettingRepository settings,
-        IUnitOfWork unitOfWork,
+        ITournamentStatusRepository statuses,
         IClock clock)
     {
-        _settings = settings;
-        _unitOfWork = unitOfWork;
+        _statuses = statuses;
         _clock = clock;
     }
 
@@ -25,52 +22,55 @@ public sealed class CreateTournamentStatusHandler
         CreateTournamentStatusCommand request,
         CancellationToken cancellationToken)
     {
-        var name = request.Name.Trim();
-        if (string.IsNullOrWhiteSpace(name))
+        var nameEs = (request.NameEs ?? string.Empty).Trim();
+        var nameEn = (request.NameEn ?? string.Empty).Trim();
+        var namePt = (request.NamePt ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(nameEs)
+            && string.IsNullOrWhiteSpace(nameEn)
+            && string.IsNullOrWhiteSpace(namePt))
         {
             return Result.Failure<TournamentStatusResponse>(TournamentStatusCatalogErrors.NameRequired);
         }
 
-        var key = request.Key.Trim().ToLowerInvariant();
-
-        var (setting, items) = await TournamentStatusCatalogStore.LoadAsync(_settings, _clock, cancellationToken);
-
-        if (items.Any(item => string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase)))
+        var key = (request.Key ?? string.Empty).Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(key))
         {
-            return Result.Failure<TournamentStatusResponse>(TournamentStatusCatalogErrors.NameAlreadyExists);
+            return Result.Failure<TournamentStatusResponse>(TournamentStatusCatalogErrors.KeyRequired);
         }
 
-        if (items.Any(item => string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase)))
+        var existing = await _statuses.GetByKeyAsync(key, cancellationToken);
+        if (existing is not null)
         {
             return Result.Failure<TournamentStatusResponse>(TournamentStatusCatalogErrors.KeyAlreadyExists);
         }
 
+        // Locale columns are NOT NULL in DB. When the caller (admin user) only
+        // provided their active locale we mirror that value into the rest so
+        // the row stays consistent until a sysadmin completes the translations.
+        var fallbackName = !string.IsNullOrEmpty(nameEs)
+            ? nameEs
+            : !string.IsNullOrEmpty(nameEn) ? nameEn : namePt;
+
         var nowUtc = _clock.UtcNow;
-        var created = new TournamentStatusCatalogItem(
-            Id: $"ts_{Guid.NewGuid():N}",
-            Name: name,
+        var dto = new TournamentStatusDto(
+            Id: Guid.NewGuid(),
             Key: key,
-            Description: string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+            NameEs: string.IsNullOrEmpty(nameEs) ? fallbackName : nameEs,
+            NameEn: string.IsNullOrEmpty(nameEn) ? fallbackName : nameEn,
+            NamePt: string.IsNullOrEmpty(namePt) ? fallbackName : namePt,
+            DescriptionEs: NullIfBlank(request.DescriptionEs),
+            DescriptionEn: NullIfBlank(request.DescriptionEn),
+            DescriptionPt: NullIfBlank(request.DescriptionPt),
             SortOrder: request.SortOrder,
             IsActive: true,
             CreatedAt: nowUtc,
             UpdatedAt: nowUtc);
 
-        items.Add(created);
-
-        var saved = await TournamentStatusCatalogStore.SaveAsync(
-            items,
-            setting,
-            _settings,
-            _unitOfWork,
-            _clock,
-            cancellationToken);
-
-        if (saved.IsFailure)
-        {
-            return Result.Failure<TournamentStatusResponse>(saved.Error);
-        }
-
-        return Result.Success(created.ToResponse());
+        var inserted = await _statuses.AddAsync(dto, cancellationToken);
+        return Result.Success(TournamentStatusMapper.ToResponse(inserted));
     }
+
+    private static string? NullIfBlank(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

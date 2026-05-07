@@ -15,40 +15,50 @@ public class TournamentStatusesLifecycleTests
     {
         var h = new TournamentStatusesTestHarness(Now);
 
-        var initial = await h.GetAll.Handle(new GetTournamentStatusesQuery(), CancellationToken.None);
-        Assert.True(initial.IsSuccess);
-        Assert.NotEmpty(initial.Value);
-
         var created = await h.Create.Handle(
-            new CreateTournamentStatusCommand("Pendiente de Sorteo", "pending_draw", "Esperando armado", 90),
+            new CreateTournamentStatusCommand(
+                Key: "pending_draw",
+                NameEs: "Pendiente de Sorteo",
+                NameEn: "Pending Draw",
+                NamePt: "Sorteio pendente",
+                DescriptionEs: "Esperando armado",
+                DescriptionEn: "Waiting for the draw",
+                DescriptionPt: "Aguardando sorteio",
+                SortOrder: 90),
             CancellationToken.None);
 
         Assert.True(created.IsSuccess);
         Assert.Equal("pending_draw", created.Value.Key);
+        Assert.Equal("Pendiente de Sorteo", created.Value.NameEs);
 
-        var fetched = await h.GetById.Handle(new GetTournamentStatusByIdQuery(created.Value.Id), CancellationToken.None);
+        var createdId = Guid.Parse(created.Value.Id);
+        var fetched = await h.GetById.Handle(new GetTournamentStatusByIdQuery(createdId), CancellationToken.None);
         Assert.True(fetched.IsSuccess);
         Assert.Equal(created.Value.Id, fetched.Value.Id);
 
         h.Clock.UtcNow = Now.AddHours(1);
         var updated = await h.Update.Handle(
             new UpdateTournamentStatusCommand(
-                created.Value.Id,
-                Name: "Sorteo en Proceso",
-                Description: "Sorteo activo",
+                Id: createdId,
+                NameEs: "Sorteo en Proceso",
+                NameEn: "Draw In Progress",
+                NamePt: "Sorteio em andamento",
+                DescriptionEs: "Sorteo activo",
+                DescriptionEn: "Active draw",
+                DescriptionPt: "Sorteio ativo",
                 SortOrder: 120,
                 IsActive: false),
             CancellationToken.None);
 
         Assert.True(updated.IsSuccess);
-        Assert.Equal("Sorteo en Proceso", updated.Value.Name);
+        Assert.Equal("Sorteo en Proceso", updated.Value.NameEs);
         Assert.False(updated.Value.IsActive);
         Assert.Equal(Now.AddHours(1), updated.Value.UpdatedAt);
 
-        var deleted = await h.Delete.Handle(new DeleteTournamentStatusCommand(created.Value.Id), CancellationToken.None);
+        var deleted = await h.Delete.Handle(new DeleteTournamentStatusCommand(createdId), CancellationToken.None);
         Assert.True(deleted.IsSuccess);
 
-        var missing = await h.GetById.Handle(new GetTournamentStatusByIdQuery(created.Value.Id), CancellationToken.None);
+        var missing = await h.GetById.Handle(new GetTournamentStatusByIdQuery(createdId), CancellationToken.None);
         Assert.True(missing.IsFailure);
         Assert.Equal("tournament_statuses.not_found", missing.Error.Code);
     }
@@ -59,11 +69,11 @@ public class TournamentStatusesLifecycleTests
         var h = new TournamentStatusesTestHarness(Now);
 
         var first = await h.Create.Handle(
-            new CreateTournamentStatusCommand("Estado A", "same_key", null, 1),
+            new CreateTournamentStatusCommand("same_key", "Estado A", "Status A", "Estado A", null, null, null, 1),
             CancellationToken.None);
 
         var duplicate = await h.Create.Handle(
-            new CreateTournamentStatusCommand("Estado B", "same_key", null, 2),
+            new CreateTournamentStatusCommand("same_key", "Estado B", "Status B", "Estado B", null, null, null, 2),
             CancellationToken.None);
 
         Assert.True(first.IsSuccess);
@@ -72,26 +82,45 @@ public class TournamentStatusesLifecycleTests
     }
 
     [Fact]
-    public async Task Update_DuplicateName_ReturnsConflict()
+    public async Task Update_PartialLocale_PreservesOtherTranslations()
     {
         var h = new TournamentStatusesTestHarness(Now);
 
-        var first = await h.Create.Handle(
-            new CreateTournamentStatusCommand("Clasificacion", "classification", null, 10),
+        var created = await h.Create.Handle(
+            new CreateTournamentStatusCommand(
+                "classification",
+                NameEs: "Clasificación",
+                NameEn: "Classification",
+                NamePt: "Classificação",
+                DescriptionEs: "Fase de clasificación",
+                DescriptionEn: null,
+                DescriptionPt: null,
+                SortOrder: 10),
             CancellationToken.None);
 
-        var second = await h.Create.Handle(
-            new CreateTournamentStatusCommand("Eliminacion", "elimination", null, 20),
+        Assert.True(created.IsSuccess);
+        var id = Guid.Parse(created.Value.Id);
+
+        // Admin with EN locale only updates the English label.
+        var updated = await h.Update.Handle(
+            new UpdateTournamentStatusCommand(
+                Id: id,
+                NameEs: "",            // blank → preserve previous
+                NameEn: "Group Stage",
+                NamePt: "",
+                DescriptionEs: null,   // null → preserve previous
+                DescriptionEn: "Round-robin phase",
+                DescriptionPt: null,
+                SortOrder: 10,
+                IsActive: true),
             CancellationToken.None);
 
-        var duplicate = await h.Update.Handle(
-            new UpdateTournamentStatusCommand(second.Value.Id, first.Value.Name, null, 30, true),
-            CancellationToken.None);
-
-        Assert.True(first.IsSuccess);
-        Assert.True(second.IsSuccess);
-        Assert.True(duplicate.IsFailure);
-        Assert.Equal("tournament_statuses.name_exists", duplicate.Error.Code);
+        Assert.True(updated.IsSuccess);
+        Assert.Equal("Clasificación", updated.Value.NameEs);
+        Assert.Equal("Group Stage", updated.Value.NameEn);
+        Assert.Equal("Classificação", updated.Value.NamePt);
+        Assert.Equal("Fase de clasificación", updated.Value.DescriptionEs);
+        Assert.Equal("Round-robin phase", updated.Value.DescriptionEn);
     }
 
     [Fact]
@@ -99,7 +128,9 @@ public class TournamentStatusesLifecycleTests
     {
         var h = new TournamentStatusesTestHarness(Now);
 
-        var deleted = await h.Delete.Handle(new DeleteTournamentStatusCommand("missing"), CancellationToken.None);
+        var deleted = await h.Delete.Handle(
+            new DeleteTournamentStatusCommand(Guid.NewGuid()),
+            CancellationToken.None);
 
         Assert.True(deleted.IsFailure);
         Assert.Equal("tournament_statuses.not_found", deleted.Error.Code);

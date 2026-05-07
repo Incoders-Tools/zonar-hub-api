@@ -7,28 +7,23 @@ namespace ZonarHub.Application.Features.TournamentStatuses.GetById;
 public sealed class GetTournamentStatusByIdHandler
     : IRequestHandler<GetTournamentStatusByIdQuery, Result<TournamentStatusResponse>>
 {
-    private readonly ISystemSettingRepository _settings;
-    private readonly IClock _clock;
+    private readonly ITournamentStatusRepository _statuses;
 
-    public GetTournamentStatusByIdHandler(
-        ISystemSettingRepository settings,
-        IClock clock)
+    public GetTournamentStatusByIdHandler(ITournamentStatusRepository statuses)
     {
-        _settings = settings;
-        _clock = clock;
+        _statuses = statuses;
     }
 
     public async Task<Result<TournamentStatusResponse>> Handle(
         GetTournamentStatusByIdQuery request,
         CancellationToken cancellationToken)
     {
-        var (_, items) = await TournamentStatusCatalogStore.LoadAsync(_settings, _clock, cancellationToken);
-        var status = items.FirstOrDefault(item => string.Equals(item.Id, request.Id, StringComparison.OrdinalIgnoreCase));
-        if (status is null)
+        var current = await _statuses.GetByIdAsync(request.Id, cancellationToken);
+        if (current is null)
         {
             return Result.Failure<TournamentStatusResponse>(TournamentStatusCatalogErrors.NotFound);
         }
 
-        return Result.Success(status.ToResponse());
+        return Result.Success(TournamentStatusMapper.ToResponse(current));
     }
 }

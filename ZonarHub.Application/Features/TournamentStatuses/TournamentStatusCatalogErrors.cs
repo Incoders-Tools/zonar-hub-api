@@ -19,4 +19,8 @@ internal static class TournamentStatusCatalogErrors
     public static readonly Error KeyAlreadyExists = Error.Conflict(
         "tournament_statuses.key_exists",
         "tournament_statuses.errors.key_exists");
+
+    public static readonly Error KeyRequired = Error.Validation(
+        "tournament_statuses.key_required",
+        "tournament_statuses.errors.key_required");
 }

@@ -24,12 +24,12 @@ public static class TournamentStatusesEndpointsExtensions
         group.MapGet("/", GetAllAsync)
             .WithName("GetAllTournamentStatuses")
             .WithSummary("Get all tournament statuses")
-            .WithDescription("Returns all tournament statuses ordered by sort order.")
+            .WithDescription("Returns tournament statuses with all locale variants. Pass includeInactive=false to skip disabled rows.")
             .Produces<TournamentStatusListResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
-        group.MapGet("/{id}", GetByIdAsync)
+        group.MapGet("/{id:guid}", GetByIdAsync)
             .WithName("GetTournamentStatusById")
             .WithSummary("Get tournament status by ID")
             .Produces<TournamentStatusResponse>(StatusCodes.Status200OK)
@@ -46,7 +46,7 @@ public static class TournamentStatusesEndpointsExtensions
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
-        group.MapPut("/{id}", UpdateAsync)
+        group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateTournamentStatus")
             .WithSummary("Update a tournament status")
             .Produces<TournamentStatusResponse>(StatusCodes.Status200OK)
@@ -56,7 +56,7 @@ public static class TournamentStatusesEndpointsExtensions
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
-        group.MapDelete("/{id}", DeleteAsync)
+        group.MapDelete("/{id:guid}", DeleteAsync)
             .WithName("DeleteTournamentStatus")
             .WithSummary("Delete a tournament status")
             .Produces(StatusCodes.Status204NoContent)
@@ -69,14 +69,15 @@ public static class TournamentStatusesEndpointsExtensions
 
     private static async Task<IResult> GetAllAsync(
         ISender sender,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [FromQuery] bool includeInactive = true)
     {
-        var result = await sender.Send(new GetTournamentStatusesQuery(), cancellationToken);
+        var result = await sender.Send(new GetTournamentStatusesQuery(includeInactive), cancellationToken);
         return result.Match(items => (IResult)TypedResults.Ok(new TournamentStatusListResponse(items)));
     }
 
     private static async Task<IResult> GetByIdAsync(
-        string id,
+        Guid id,
         ISender sender,
         CancellationToken cancellationToken)
     {
@@ -90,27 +91,44 @@ public static class TournamentStatusesEndpointsExtensions
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(
-            new CreateTournamentStatusCommand(body.Name, body.Key, body.Description, body.SortOrder),
+            new CreateTournamentStatusCommand(
+                body.Key,
+                body.NameEs,
+                body.NameEn,
+                body.NamePt,
+                body.DescriptionEs,
+                body.DescriptionEn,
+                body.DescriptionPt,
+                body.SortOrder),
             cancellationToken);
 
         return result.Match(item => TypedResults.Created($"{RoutePrefix}/{item.Id}", item));
     }
 
     private static async Task<IResult> UpdateAsync(
-        string id,
+        Guid id,
         [FromBody] UpdateTournamentStatusRequest body,
         ISender sender,
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(
-            new UpdateTournamentStatusCommand(id, body.Name, body.Description, body.SortOrder, body.IsActive),
+            new UpdateTournamentStatusCommand(
+                id,
+                body.NameEs,
+                body.NameEn,
+                body.NamePt,
+                body.DescriptionEs,
+                body.DescriptionEn,
+                body.DescriptionPt,
+                body.SortOrder,
+                body.IsActive),
             cancellationToken);
 
         return result.Match(item => (IResult)TypedResults.Ok(item));
     }
 
     private static async Task<IResult> DeleteAsync(
-        string id,
+        Guid id,
         ISender sender,
         CancellationToken cancellationToken)
     {
@@ -122,13 +140,21 @@ public static class TournamentStatusesEndpointsExtensions
 public sealed record TournamentStatusListResponse(IReadOnlyList<TournamentStatusResponse> Items);
 
 public sealed record CreateTournamentStatusRequest(
-    string Name,
     string Key,
-    string? Description,
+    string NameEs,
+    string NameEn,
+    string NamePt,
+    string? DescriptionEs,
+    string? DescriptionEn,
+    string? DescriptionPt,
     int SortOrder);
 
 public sealed record UpdateTournamentStatusRequest(
-    string Name,
-    string? Description,
+    string NameEs,
+    string NameEn,
+    string NamePt,
+    string? DescriptionEs,
+    string? DescriptionEn,
+    string? DescriptionPt,
     int SortOrder,
     bool IsActive);
