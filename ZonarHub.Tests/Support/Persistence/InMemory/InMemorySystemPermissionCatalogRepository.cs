@@ -91,14 +91,14 @@ public sealed class InMemorySystemPermissionCatalogRepository : ISystemPermissio
                     Tool("tool_users", "users", "system", "admin.users", "/admin/system/users", 1),
                     Tool("tool_roles", "roles", "system", "admin.roles", "/admin/system/roles", 2, true),
                     Tool("tool_organizations", "organizations", "system", "admin.organizations", "/admin/system/organizations", 3),
-                    Tool("tool_plans", "plans", "system", "admin.plans", "/admin/system/plans", 4, true),
+                    Tool("tool_plans", "plans", "system", "admin.plans", "/admin/system/plans", 4),
                     Tool("tool_actions", "actions", "system", "admin.nav.actions", "/admin/system/actions", 5, true),
                     Tool("tool_audit", "audit", "system", "admin.audit", "/admin/system/audit", 6, true),
                     Tool("tool_app_logs", "app-logs", "system", "admin.appLogs", "/admin/system/logs", 7, true),
                     Tool("tool_security", "security", "system", "admin.security", "/admin/system/security", 8, true),
                     Tool("tool_settings", "settings", "system", "admin.settings", "/admin/system/settings", 9),
                     Tool("tool_email_templates", "email-templates", "system", "admin.emailTemplates", "/admin/system/email-templates", 10, true),
-                    Tool("tool_billing", "billing", "system", "admin.billing", "/admin/billing", 11, true)
+                    Tool("tool_billing", "billing", "system", "admin.billing", "/admin/billing", 11)
                 ])
         };
 
