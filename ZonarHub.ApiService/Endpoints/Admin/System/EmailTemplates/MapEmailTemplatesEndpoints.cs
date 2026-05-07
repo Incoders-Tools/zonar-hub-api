@@ -9,7 +9,7 @@ using ZonarHub.Application.Features.EmailTemplates.GetAll;
 using ZonarHub.Application.Features.EmailTemplates.GetById;
 using ZonarHub.Application.Features.EmailTemplates.Update;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.EmailTemplates;
+namespace ZonarHub.ApiService.Endpoints.Admin.System.EmailTemplates;
 
 public static class EmailTemplatesEndpointsExtensions
 {

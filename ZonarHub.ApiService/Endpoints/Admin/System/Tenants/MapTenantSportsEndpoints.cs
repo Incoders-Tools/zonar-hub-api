@@ -5,7 +5,7 @@ using ZonarHub.Application.Features.TenantSports.Set;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.Tenants;
+namespace ZonarHub.ApiService.Endpoints.Admin.System.Tenants;
 
 public static class TenantSportsEndpointsExtensions
 {

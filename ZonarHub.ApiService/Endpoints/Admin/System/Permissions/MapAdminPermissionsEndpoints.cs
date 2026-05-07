@@ -7,7 +7,7 @@ using ZonarHub.Application.Features.AdminPermissions.GetUserPermissions;
 using ZonarHub.Application.Features.AdminUsers;
 using ZonarHub.Application.Features.AdminUsers.Update;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.Permissions;
+namespace ZonarHub.ApiService.Endpoints.Admin.System.Permissions;
 
 public static class AdminPermissionsEndpointsExtensions
 {

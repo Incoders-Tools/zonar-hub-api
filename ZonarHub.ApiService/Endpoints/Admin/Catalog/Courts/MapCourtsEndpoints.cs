@@ -8,7 +8,7 @@ using ZonarHub.Application.Features.Courts.GetById;
 using ZonarHub.Application.Features.Courts.GetByComplexId;
 using ZonarHub.Application.Features.Courts.Update;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.Courts;
+namespace ZonarHub.ApiService.Endpoints.Admin.Catalog.Courts;
 
 public static class CourtsEndpointsExtensions
 {

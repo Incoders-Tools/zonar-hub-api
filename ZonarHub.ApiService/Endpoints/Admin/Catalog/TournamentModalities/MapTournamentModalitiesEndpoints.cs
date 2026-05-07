@@ -3,7 +3,7 @@ using ZonarHub.ApiService.Endpoints.Common;
 using ZonarHub.Application.Features.TournamentModalities;
 using ZonarHub.Application.Features.TournamentModalities.GetAll;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.TournamentModalities;
+namespace ZonarHub.ApiService.Endpoints.Admin.Catalog.TournamentModalities;
 
 public static class TournamentModalitiesEndpointsExtensions
 {

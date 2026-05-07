@@ -5,7 +5,7 @@ using ZonarHub.Application.Features.OrganizationSports.Set;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.Organizations;
+namespace ZonarHub.ApiService.Endpoints.Admin.System.Organizations;
 
 public static class OrganizationSportsEndpointsExtensions
 {

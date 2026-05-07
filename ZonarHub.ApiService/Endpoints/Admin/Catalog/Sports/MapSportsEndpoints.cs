@@ -10,7 +10,7 @@ using ZonarHub.Domain.Sports;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.Sports;
+namespace ZonarHub.ApiService.Endpoints.Admin.Catalog.Sports;
 
 public static class SportsEndpointsExtensions
 {

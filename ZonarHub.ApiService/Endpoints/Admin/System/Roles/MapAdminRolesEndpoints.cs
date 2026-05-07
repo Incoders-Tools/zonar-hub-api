@@ -1,55 +1,58 @@
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using ZonarHub.ApiService.Endpoints.Common;
-using ZonarHub.Application.Features.TournamentStatuses;
-using ZonarHub.Application.Features.TournamentStatuses.Create;
-using ZonarHub.Application.Features.TournamentStatuses.Delete;
-using ZonarHub.Application.Features.TournamentStatuses.GetAll;
-using ZonarHub.Application.Features.TournamentStatuses.GetById;
-using ZonarHub.Application.Features.TournamentStatuses.Update;
+using ZonarHub.Application.Features.AdminRoles;
+using ZonarHub.Application.Features.AdminRoles.Create;
+using ZonarHub.Application.Features.AdminRoles.Delete;
+using ZonarHub.Application.Features.AdminRoles.GetAll;
+using ZonarHub.Application.Features.AdminRoles.GetById;
+using ZonarHub.Application.Features.AdminRoles.Update;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.TournamentStatuses;
+namespace ZonarHub.ApiService.Endpoints.Admin.System.Roles;
 
-public static class TournamentStatusesEndpointsExtensions
+public static class AdminRolesEndpointsExtensions
 {
-    private const string Tag = "Admin.TournamentStatuses";
-    private const string RoutePrefix = "/api/admin/tournament-statuses";
+    private const string Tag = "Admin.Roles";
+    private const string RoutePrefix = "/api/admin/roles";
 
-    public static IEndpointRouteBuilder MapTournamentStatusesEndpoints(this IEndpointRouteBuilder app)
+    public static IEndpointRouteBuilder MapAdminRolesEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup(RoutePrefix)
             .WithTags(Tag)
-            .RequireAuthorization("AdminOrAbove");
+            .RequireAuthorization("SystemAdminOnly");
 
         group.MapGet("/", GetAllAsync)
-            .WithName("GetAllTournamentStatuses")
-            .WithSummary("Get all tournament statuses")
-            .WithDescription("Returns all tournament statuses ordered by sort order.")
-            .Produces<TournamentStatusListResponse>(StatusCodes.Status200OK)
+            .WithName("GetAllAdminRoles")
+            .WithSummary("Get all roles")
+            .WithDescription("Returns all roles ordered by role name.")
+            .Produces<AdminRoleListResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapGet("/{id}", GetByIdAsync)
-            .WithName("GetTournamentStatusById")
-            .WithSummary("Get tournament status by ID")
-            .Produces<TournamentStatusResponse>(StatusCodes.Status200OK)
+            .WithName("GetAdminRoleById")
+            .WithSummary("Get role by ID")
+            .WithDescription("Returns one role by its identifier.")
+            .Produces<AdminRoleResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPost("/", CreateAsync)
-            .WithName("CreateTournamentStatus")
-            .WithSummary("Create a tournament status")
-            .Produces<TournamentStatusResponse>(StatusCodes.Status201Created)
+            .WithName("CreateAdminRole")
+            .WithSummary("Create a role")
+            .WithDescription("Creates a custom role that can be managed by system administrators.")
+            .Produces<AdminRoleResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPut("/{id}", UpdateAsync)
-            .WithName("UpdateTournamentStatus")
-            .WithSummary("Update a tournament status")
-            .Produces<TournamentStatusResponse>(StatusCodes.Status200OK)
+            .WithName("UpdateAdminRole")
+            .WithSummary("Update a role")
+            .WithDescription("Updates role metadata for non-system roles.")
+            .Produces<AdminRoleResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict)
@@ -57,8 +60,9 @@ public static class TournamentStatusesEndpointsExtensions
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapDelete("/{id}", DeleteAsync)
-            .WithName("DeleteTournamentStatus")
-            .WithSummary("Delete a tournament status")
+            .WithName("DeleteAdminRole")
+            .WithSummary("Delete a role")
+            .WithDescription("Deletes a non-system role by ID.")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
@@ -71,8 +75,8 @@ public static class TournamentStatusesEndpointsExtensions
         ISender sender,
         CancellationToken cancellationToken)
     {
-        var result = await sender.Send(new GetTournamentStatusesQuery(), cancellationToken);
-        return result.Match(items => (IResult)TypedResults.Ok(new TournamentStatusListResponse(items)));
+        var result = await sender.Send(new GetAdminRolesQuery(), cancellationToken);
+        return result.Match(items => (IResult)TypedResults.Ok(new AdminRoleListResponse(items)));
     }
 
     private static async Task<IResult> GetByIdAsync(
@@ -80,17 +84,17 @@ public static class TournamentStatusesEndpointsExtensions
         ISender sender,
         CancellationToken cancellationToken)
     {
-        var result = await sender.Send(new GetTournamentStatusByIdQuery(id), cancellationToken);
+        var result = await sender.Send(new GetAdminRoleByIdQuery(id), cancellationToken);
         return result.Match(item => (IResult)TypedResults.Ok(item));
     }
 
     private static async Task<IResult> CreateAsync(
-        [FromBody] CreateTournamentStatusRequest body,
+        [FromBody] CreateAdminRoleRequest body,
         ISender sender,
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(
-            new CreateTournamentStatusCommand(body.Name, body.Key, body.Description, body.SortOrder),
+            new CreateAdminRoleCommand(body.Name, body.Description, body.IsActive),
             cancellationToken);
 
         return result.Match(item => TypedResults.Created($"{RoutePrefix}/{item.Id}", item));
@@ -98,12 +102,12 @@ public static class TournamentStatusesEndpointsExtensions
 
     private static async Task<IResult> UpdateAsync(
         string id,
-        [FromBody] UpdateTournamentStatusRequest body,
+        [FromBody] UpdateAdminRoleRequest body,
         ISender sender,
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(
-            new UpdateTournamentStatusCommand(id, body.Name, body.Description, body.SortOrder, body.IsActive),
+            new UpdateAdminRoleCommand(id, body.Name, body.Description, body.IsActive),
             cancellationToken);
 
         return result.Match(item => (IResult)TypedResults.Ok(item));
@@ -114,21 +118,19 @@ public static class TournamentStatusesEndpointsExtensions
         ISender sender,
         CancellationToken cancellationToken)
     {
-        var result = await sender.Send(new DeleteTournamentStatusCommand(id), cancellationToken);
+        var result = await sender.Send(new DeleteAdminRoleCommand(id), cancellationToken);
         return result.Match(() => (IResult)TypedResults.NoContent());
     }
 }
 
-public sealed record TournamentStatusListResponse(IReadOnlyList<TournamentStatusResponse> Items);
+public sealed record AdminRoleListResponse(IReadOnlyList<AdminRoleResponse> Items);
 
-public sealed record CreateTournamentStatusRequest(
+public sealed record CreateAdminRoleRequest(
     string Name,
-    string Key,
-    string? Description,
-    int SortOrder);
-
-public sealed record UpdateTournamentStatusRequest(
-    string Name,
-    string? Description,
-    int SortOrder,
+    string Description,
     bool IsActive);
+
+public sealed record UpdateAdminRoleRequest(
+    string? Name,
+    string? Description,
+    bool? IsActive);

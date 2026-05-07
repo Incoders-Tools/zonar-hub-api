@@ -7,7 +7,7 @@ using ZonarHub.Application.Features.Complexes.Delete;
 using ZonarHub.Application.Features.Complexes.GetAll;
 using ZonarHub.Application.Features.Complexes.Update;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.Complexes;
+namespace ZonarHub.ApiService.Endpoints.Admin.Catalog.Complexes;
 
 public static class ComplexesEndpointsExtensions
 {

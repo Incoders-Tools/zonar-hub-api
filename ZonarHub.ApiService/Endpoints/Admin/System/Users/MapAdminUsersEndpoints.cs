@@ -8,7 +8,7 @@ using ZonarHub.Application.Features.AdminUsers.Delete;
 using ZonarHub.Application.Features.AdminUsers.GetAll;
 using ZonarHub.Application.Features.AdminUsers.Update;
 
-namespace ZonarHub.ApiService.Endpoints.Admin.Users;
+namespace ZonarHub.ApiService.Endpoints.Admin.System.Users;
 
 public static class AdminUsersEndpointsExtensions
 {
