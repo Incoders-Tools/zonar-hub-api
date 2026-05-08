@@ -47,6 +47,12 @@ public sealed class Sport : Entity<SportId>
             return Result.Failure<Sport>(SportErrors.IconRequired);
         }
 
+        var modalityList = modalityIds?.Distinct().ToList() ?? [];
+        if (modalityList.Count == 0)
+        {
+            return Result.Failure<Sport>(SportErrors.ModalityRequired);
+        }
+
         var sport = new Sport(id)
         {
             Name = name.Trim(),
@@ -59,10 +65,7 @@ public sealed class Sport : Entity<SportId>
             UpdatedAtUtc = nowUtc,
         };
 
-        if (modalityIds is not null)
-        {
-            sport._modalityIds.AddRange(modalityIds.Distinct());
-        }
+        sport._modalityIds.AddRange(modalityList);
 
         return Result.Success(sport);
     }
@@ -118,6 +121,12 @@ public sealed class Sport : Entity<SportId>
             return Result.Failure(SportErrors.IconRequired);
         }
 
+        var modalityList = modalityIds?.Distinct().ToList() ?? [];
+        if (modalityList.Count == 0)
+        {
+            return Result.Failure(SportErrors.ModalityRequired);
+        }
+
         Name = name.Trim();
         Icon = icon.Trim();
         IconSource = iconSource;
@@ -126,11 +135,7 @@ public sealed class Sport : Entity<SportId>
         UpdatedAtUtc = nowUtc;
 
         _modalityIds.Clear();
-
-        if (modalityIds is not null)
-        {
-            _modalityIds.AddRange(modalityIds.Distinct());
-        }
+        _modalityIds.AddRange(modalityList);
 
         return Result.Success();
     }

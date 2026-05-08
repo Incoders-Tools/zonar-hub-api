@@ -23,4 +23,8 @@ public static class SportErrors
     public static readonly Error KeyAlreadyExists = Error.Conflict(
         "sports.key_exists",
         "sports.errors.key_exists");
+
+    public static readonly Error ModalityRequired = Error.Validation(
+        "sports.modality_required",
+        "sports.errors.modality_required");
 }

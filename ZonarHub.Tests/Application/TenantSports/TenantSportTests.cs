@@ -16,10 +16,10 @@ public class TenantSportTests
         var tenantId = Guid.NewGuid();
 
         var padel = await h.CreateSport.Handle(
-            new CreateSportCommand("Padel", "padel", "tennis", SportIconSource.Unicode, null, 1),
+            new CreateSportCommand("Padel", "padel", "tennis", SportIconSource.Unicode, new[] { Guid.NewGuid() },1),
             CancellationToken.None);
         var tennis = await h.CreateSport.Handle(
-            new CreateSportCommand("Tennis", "tennis", "tennis", SportIconSource.Unicode, null, 2),
+            new CreateSportCommand("Tennis", "tennis", "tennis", SportIconSource.Unicode, new[] { Guid.NewGuid() },2),
             CancellationToken.None);
 
         Assert.True(padel.IsSuccess);

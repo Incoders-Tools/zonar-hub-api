@@ -24,10 +24,10 @@ public class OrganizationSportTests
         Assert.True(org.IsSuccess);
 
         var padel = await h.CreateSport.Handle(
-            new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, null, 1),
+            new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },1),
             CancellationToken.None);
         var tennis = await h.CreateSport.Handle(
-            new CreateSportCommand("Tennis", "tennis", "🎾", SportIconSource.Unicode, null, 2),
+            new CreateSportCommand("Tennis", "tennis", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },2),
             CancellationToken.None);
         Assert.True(padel.IsSuccess);
         Assert.True(tennis.IsSuccess);
@@ -61,10 +61,10 @@ public class OrganizationSportTests
             CancellationToken.None);
 
         var padel = await h.CreateSport.Handle(
-            new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, null, 1),
+            new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },1),
             CancellationToken.None);
         var tennis = await h.CreateSport.Handle(
-            new CreateSportCommand("Tennis", "tennis", "🎾", SportIconSource.Unicode, null, 2),
+            new CreateSportCommand("Tennis", "tennis", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },2),
             CancellationToken.None);
 
         // Enable padel first
@@ -99,7 +99,7 @@ public class OrganizationSportTests
             CancellationToken.None);
 
         var padel = await h.CreateSport.Handle(
-            new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, null, 1),
+            new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },1),
             CancellationToken.None);
 
         var result = await h.SetOrgSports.Handle(

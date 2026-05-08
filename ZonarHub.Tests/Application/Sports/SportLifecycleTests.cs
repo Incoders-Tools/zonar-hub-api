@@ -18,7 +18,7 @@ public class SportLifecycleTests
 
         // Create
         var created = await h.Create.Handle(
-            new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, null, 1),
+            new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },1),
             CancellationToken.None);
         Assert.True(created.IsSuccess);
         Assert.Equal("padel", created.Value.Key);
@@ -41,7 +41,7 @@ public class SportLifecycleTests
         // Update
         h.Clock.UtcNow = Now.AddHours(1);
         var updated = await h.Update.Handle(
-            new UpdateSportCommand(created.Value.Id, "Padel Pro", "🏓", SportIconSource.Unicode, null, 2, true),
+            new UpdateSportCommand(created.Value.Id, "Padel Pro", "🏓", SportIconSource.Unicode, new[] { Guid.NewGuid() },2, true),
             CancellationToken.None);
         Assert.True(updated.IsSuccess);
         Assert.Equal("Padel Pro", updated.Value.Name);
@@ -67,11 +67,11 @@ public class SportLifecycleTests
         var h = new SportsTestHarness(Now);
 
         await h.Create.Handle(
-            new CreateSportCommand("Tennis", "tennis", "🎾", SportIconSource.Unicode, null, 1),
+            new CreateSportCommand("Tennis", "tennis", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },1),
             CancellationToken.None);
 
         var duplicate = await h.Create.Handle(
-            new CreateSportCommand("Tennis Pro", "tennis", "🎾", SportIconSource.Unicode, null, 2),
+            new CreateSportCommand("Tennis Pro", "tennis", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },2),
             CancellationToken.None);
 
         Assert.True(duplicate.IsFailure);
@@ -97,8 +97,8 @@ public class SportLifecycleTests
     {
         var h = new SportsTestHarness(Now);
 
-        await h.Create.Handle(new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, null, 1), CancellationToken.None);
-        await h.Create.Handle(new CreateSportCommand("Tennis", "tennis", "🎾", SportIconSource.Unicode, null, 2), CancellationToken.None);
+        await h.Create.Handle(new CreateSportCommand("Padel", "padel", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },1), CancellationToken.None);
+        await h.Create.Handle(new CreateSportCommand("Tennis", "tennis", "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() },2), CancellationToken.None);
 
         var filtered = await h.List.Handle(
             new GetSportsQuery(new SportFilter(NameContains: "pad")),

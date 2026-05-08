@@ -131,7 +131,7 @@ public class CompleteOnboardingTests
         int sortOrder)
     {
         var result = await h.CreateSport.Handle(
-            new CreateSportCommand(name, key, "🎾", SportIconSource.Unicode, Array.Empty<Guid>(), sortOrder),
+            new CreateSportCommand(name, key, "🎾", SportIconSource.Unicode, new[] { Guid.NewGuid() }, sortOrder),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
