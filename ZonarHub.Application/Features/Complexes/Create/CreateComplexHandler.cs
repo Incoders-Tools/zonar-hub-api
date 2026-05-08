@@ -9,10 +9,12 @@ namespace ZonarHub.Application.Features.Complexes.Create;
 public sealed class CreateComplexHandler : IRequestHandler<CreateComplexCommand, Result<ComplexResponse>>
 {
     private readonly IComplexRepository _complexes;
+    private readonly IUnitOfWork _unitOfWork;
 
-    public CreateComplexHandler(IComplexRepository complexes)
+    public CreateComplexHandler(IComplexRepository complexes, IUnitOfWork unitOfWork)
     {
         _complexes = complexes;
+        _unitOfWork = unitOfWork;
     }
 
     public async Task<Result<ComplexResponse>> Handle(
@@ -38,6 +40,7 @@ public sealed class CreateComplexHandler : IRequestHandler<CreateComplexCommand,
             return Result.Failure<ComplexResponse>(result.Error);
 
         await _complexes.AddAsync(result.Value, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result.Success(ComplexResponse.FromDomain(result.Value));
     }
