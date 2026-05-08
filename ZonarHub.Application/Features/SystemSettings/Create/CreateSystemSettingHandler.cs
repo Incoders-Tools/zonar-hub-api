@@ -27,6 +27,8 @@ public sealed class CreateSystemSettingHandler
         CancellationToken cancellationToken)
     {
         var key = (request.Key ?? string.Empty).Trim();
+        var now = _clock.UtcNow;
+
         var existing = await _settings.GetByKeyAsync(
             key,
             request.Scope,
@@ -34,9 +36,31 @@ public sealed class CreateSystemSettingHandler
             request.UserId,
             cancellationToken);
 
+        // Idempotent create: if a row with the same identity tuple already
+        // exists, update its value instead of failing. This handles concurrent
+        // POSTs from the frontend (the user-preferences sync fans out 4
+        // parallel upserts on every value change) where the find-then-create
+        // pattern would otherwise race and a second insert would hit the
+        // Supabase UNIQUE(key, scope, tenant_id, user_id) constraint with a
+        // 409 — which previously surfaced as a 500 from EnsureSuccessStatusCode.
         if (existing is not null)
         {
-            return Result.Failure<SystemSettingResponse>(SystemSettingErrors.KeyAlreadyExists);
+            var updateResult = existing.Update(
+                request.Value,
+                request.Scope,
+                request.TenantId,
+                request.UserId,
+                now);
+
+            if (updateResult.IsFailure)
+            {
+                return Result.Failure<SystemSettingResponse>(updateResult.Error);
+            }
+
+            _settings.Update(existing);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return Result.Success(SystemSettingResponse.FromDomain(existing));
         }
 
         var created = SystemSetting.Create(
@@ -46,7 +70,7 @@ public sealed class CreateSystemSettingHandler
             request.Scope,
             request.TenantId,
             request.UserId,
-            _clock.UtcNow);
+            now);
 
         if (created.IsFailure)
         {

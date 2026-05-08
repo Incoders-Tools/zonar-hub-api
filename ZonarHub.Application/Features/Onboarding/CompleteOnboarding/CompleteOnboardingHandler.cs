@@ -212,7 +212,11 @@ public sealed class CompleteOnboardingHandler
         await _orgSports.SetEnabledSportsAsync(org.Id, sportIds, cancellationToken);
         await _tenantSports.SetEnabledSportsAsync(new TenantId(request.TenantId), sportIds, cancellationToken);
 
-        // Step 5 — Create tournament (optional)
+        // Step 5 — Create tournament (optional).
+        // We populate `key`, `registration_start_date` and `registration_end_date`
+        // here so the row is complete on first write. The frontend used to
+        // augment these fields after onboarding by issuing a second POST
+        // /admin/tournaments call, which produced duplicate rows.
         Guid? tournamentId = null;
 
         if (request.Tournament is { } t)
@@ -225,7 +229,13 @@ public sealed class CompleteOnboardingHandler
                 t.Name,
                 t.StartDate,
                 t.EndDate,
-                now);
+                now,
+                key: null,
+                // Default registration window to the tournament start so the
+                // row matches the conventional shape used elsewhere in the
+                // product. Operators can refine the window from the admin UI.
+                registrationStartDate: t.StartDate,
+                registrationEndDate: t.StartDate);
 
             if (tournamentResult.IsFailure)
                 return Result.Failure<CompleteOnboardingResponse>(tournamentResult.Error);

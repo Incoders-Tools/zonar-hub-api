@@ -199,22 +199,58 @@ internal sealed class SystemSettingRepository : ISystemSettingRepository
         req.Headers.Add("Prefer", "return=minimal");
         req.Content = JsonContent.Create(row);
         using var resp = await http.SendAsync(req, ct);
-        resp.EnsureSuccessStatusCode();
+        await EnsureSuccessOrThrowWithBodyAsync(resp, "POST", RestPath, ct);
     }
 
     private static async Task ExecutePatchAsync(HttpClient http, Guid id, SystemSettingPatchRow row, CancellationToken ct)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Patch, $"{RestPath}?id=eq.{id}");
+        var url = $"{RestPath}?id=eq.{id}";
+        using var req = new HttpRequestMessage(HttpMethod.Patch, url);
         req.Headers.Add("Prefer", "return=minimal");
         req.Content = JsonContent.Create(row);
         using var resp = await http.SendAsync(req, ct);
-        resp.EnsureSuccessStatusCode();
+        await EnsureSuccessOrThrowWithBodyAsync(resp, "PATCH", url, ct);
     }
 
     private static async Task ExecuteDeleteAsync(HttpClient http, Guid id, CancellationToken ct)
     {
-        using var resp = await http.DeleteAsync($"{RestPath}?id=eq.{id}", ct);
-        resp.EnsureSuccessStatusCode();
+        var url = $"{RestPath}?id=eq.{id}";
+        using var resp = await http.DeleteAsync(url, ct);
+        await EnsureSuccessOrThrowWithBodyAsync(resp, "DELETE", url, ct);
+    }
+
+    /// <summary>
+    /// Replaces the bare EnsureSuccessStatusCode call so the actual Supabase
+    /// response body (e.g. the PostgREST error code/message/details) is
+    /// captured in the exception message and surfaces in logs. Without this
+    /// the only signal was a raw HttpRequestException with the status code,
+    /// which masked unique-violation errors as generic 5xx.
+    /// </summary>
+    private static async Task EnsureSuccessOrThrowWithBodyAsync(
+        HttpResponseMessage response,
+        string method,
+        string url,
+        CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var body = string.Empty;
+        try
+        {
+            body = await response.Content.ReadAsStringAsync(cancellationToken);
+        }
+        catch
+        {
+            // Body read failed — fall through with empty body.
+        }
+
+        throw new HttpRequestException(
+            $"Supabase {method} {url} failed with {(int)response.StatusCode} {response.ReasonPhrase}: {body}",
+            inner: null,
+            statusCode: response.StatusCode);
     }
 
     private sealed record SystemSettingRow(
