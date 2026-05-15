@@ -28,7 +28,7 @@ internal sealed class SportRepository : ISportRepository
 
     public async Task<Sport?> GetByKeyAsync(string key, CancellationToken cancellationToken = default)
     {
-        var escaped = Uri.EscapeDataString(key.Trim().ToLowerInvariant());
+        var escaped = SupabaseQuery.Value(key.ToLowerInvariant());
         var url = $"{RestPath}?select=*&key=eq.{escaped}";
         var rows = await _http.GetFromJsonAsync<List<SportRow>>(url, cancellationToken);
         var row = rows?.FirstOrDefault();
@@ -137,7 +137,11 @@ internal sealed class SportRepository : ISportRepository
 
         if (!string.IsNullOrWhiteSpace(q.NameContains))
         {
-            parts.Add($"name=ilike.*{Uri.EscapeDataString(q.NameContains.Trim())}*");
+            var name = SupabaseQuery.ContainsPattern(q.NameContains);
+            if (name is not null)
+            {
+                parts.Add($"name=ilike.*{name}*");
+            }
         }
 
         if (q.IsActive.HasValue)

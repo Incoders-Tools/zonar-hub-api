@@ -13,20 +13,26 @@ public static class TenantSportsEndpointsExtensions
 
     public static IEndpointRouteBuilder MapTenantSportsEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/admin/tenants/{tenantId:guid}/sports").WithTags(Tag);
+        var group = app.MapGroup("/api/admin/tenants/{tenantId:guid}/sports")
+            .WithTags(Tag)
+            .RequireAuthorization("AdminOrAbove");
 
         group.MapGet("/", GetAsync)
             .WithName("GetTenantSports")
             .WithSummary("Get all sports with enabled flag for a tenant")
             .Produces<TenantSportsResponse>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPut("/", SetAsync)
             .WithName("SetTenantSports")
             .WithSummary("Set which sports are enabled for a tenant")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         return app;
     }

@@ -17,7 +17,8 @@ public static class UserPreferencesEndpointsExtensions
     public static IEndpointRouteBuilder MapUserPreferencesEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/user-preferences")
-            .WithTags(Tag);
+            .WithTags(Tag)
+            .RequireAuthorization();
 
         group.MapGet("/", GetUserPreferencesAsync)
             .WithName("GetUserPreferences")

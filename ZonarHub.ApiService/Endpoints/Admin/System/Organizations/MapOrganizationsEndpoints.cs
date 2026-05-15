@@ -19,25 +19,32 @@ public static class OrganizationsEndpointsExtensions
 
     public static IEndpointRouteBuilder MapOrganizationsEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup(RoutePrefix).WithTags(Tag);
+        var group = app.MapGroup(RoutePrefix)
+            .WithTags(Tag)
+            .RequireAuthorization("AdminOrAbove");
 
         group.MapGet("/", ListAsync)
             .WithName("ListOrganizations")
             .WithSummary("List organizations for the current tenant")
-            .Produces<PageResult<OrganizationResponse>>(StatusCodes.Status200OK);
+            .Produces<PageResult<OrganizationResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapGet("/{id:guid}", GetByIdAsync)
             .WithName("GetOrganizationById")
             .WithSummary("Get a single organization by id")
             .Produces<OrganizationResponse>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPost("/", CreateAsync)
             .WithName("CreateOrganization")
             .WithSummary("Create a new organization")
             .Produces<OrganizationResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization("AdminOrAbove");
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateOrganization")
@@ -45,14 +52,16 @@ public static class OrganizationsEndpointsExtensions
             .Produces<OrganizationResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireAuthorization("AdminOrAbove");
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapDelete("/{id:guid}", DeleteAsync)
             .WithName("DeleteOrganization")
             .WithSummary("Delete an organization")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireAuthorization("AdminOrAbove");
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         return app;
     }

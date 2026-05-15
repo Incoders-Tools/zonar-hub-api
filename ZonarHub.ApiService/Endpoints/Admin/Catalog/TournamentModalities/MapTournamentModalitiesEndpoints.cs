@@ -17,40 +17,51 @@ public static class TournamentModalitiesEndpointsExtensions
 
     public static IEndpointRouteBuilder MapTournamentModalitiesEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup(RoutePrefix).WithTags(Tag);
+        var group = app.MapGroup(RoutePrefix)
+            .WithTags(Tag)
+            .RequireAuthorization("AdminOrAbove");
 
         group.MapGet("/", GetAllAsync)
-            .AllowAnonymous()
             .WithName("GetAllTournamentModalities")
             .WithSummary("Get all tournament modalities")
             .WithDescription("Returns tournament modalities. Pass includeInactive=true to include inactive entries (admin).")
-            .Produces<TournamentModalityListResponse>(StatusCodes.Status200OK);
+            .Produces<TournamentModalityListResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapGet("/{id:guid}", GetByIdAsync)
             .WithName("GetTournamentModalityById")
             .WithSummary("Get a tournament modality by id")
             .Produces<TournamentModalityResponse>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPost("/", CreateAsync)
             .WithName("CreateTournamentModality")
             .WithSummary("Create a tournament modality")
             .Produces<TournamentModalityResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateTournamentModality")
             .WithSummary("Update a tournament modality")
             .Produces<TournamentModalityResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapDelete("/{id:guid}", DeleteAsync)
             .WithName("DeleteTournamentModality")
             .WithSummary("Delete a tournament modality")
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         return app;
     }

@@ -35,7 +35,7 @@ internal sealed class SystemSettingRepository : ISystemSettingRepository
         Guid? userId,
         CancellationToken cancellationToken = default)
     {
-        var escapedKey = Uri.EscapeDataString(key.Trim());
+        var escapedKey = SupabaseQuery.Value(key);
         var parts = new List<string>
         {
             "select=*",
@@ -134,7 +134,11 @@ internal sealed class SystemSettingRepository : ISystemSettingRepository
 
         if (!string.IsNullOrWhiteSpace(query.KeyContains))
         {
-            parts.Add($"key=ilike.*{Uri.EscapeDataString(query.KeyContains.Trim())}*");
+            var key = SupabaseQuery.ContainsPattern(query.KeyContains);
+            if (key is not null)
+            {
+                parts.Add($"key=ilike.*{key}*");
+            }
         }
 
         if (query.PageSize != int.MaxValue)

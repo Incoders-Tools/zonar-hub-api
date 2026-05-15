@@ -33,7 +33,7 @@ internal sealed class OrganizationRepository : IOrganizationRepository
         string displayName,
         CancellationToken cancellationToken = default)
     {
-        var normalized = Uri.EscapeDataString(displayName.Trim());
+        var normalized = SupabaseQuery.Value(displayName);
         var url = $"{RestPath}?select=*&tenant_id=eq.{tenantId}&display_name=ilike.{normalized}&limit=1";
         var rows = await _http.GetFromJsonAsync<List<OrganizationRow>>(url, cancellationToken);
         var row = rows?.FirstOrDefault();
@@ -132,10 +132,16 @@ internal sealed class OrganizationRepository : IOrganizationRepository
             parts.Add($"tenant_id=eq.{q.TenantId.Value}");
 
         if (!string.IsNullOrWhiteSpace(q.DisplayNameContains))
-            parts.Add($"display_name=ilike.*{Uri.EscapeDataString(q.DisplayNameContains)}*");
+        {
+            var displayName = SupabaseQuery.ContainsPattern(q.DisplayNameContains);
+            if (displayName is not null)
+            {
+                parts.Add($"display_name=ilike.*{displayName}*");
+            }
+        }
 
         if (!string.IsNullOrWhiteSpace(q.Type))
-            parts.Add($"type=eq.{Uri.EscapeDataString(q.Type.ToLowerInvariant())}");
+            parts.Add($"type=eq.{SupabaseQuery.Value(q.Type.ToLowerInvariant())}");
 
         if (q.IsActive.HasValue)
             parts.Add($"is_active=eq.{q.IsActive.Value.ToString().ToLowerInvariant()}");

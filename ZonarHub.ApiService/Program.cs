@@ -20,7 +20,7 @@ using ZonarHub.ApiService.Endpoints.Admin.System.Users;
 using ZonarHub.ApiService.Endpoints.Admin.Circuit.Tournaments;
 using ZonarHub.ApiService.Endpoints.Auth;
 using ZonarHub.ApiService.Endpoints.Common;
-using ZonarHub.ApiService.Endpoints.External;
+using ZonarHub.ApiService.Security;
 using ZonarHub.ApiService.Endpoints.SystemSettings;
 using ZonarHub.ApiService.Endpoints.UserPreferences;
 using ZonarHub.Application;
@@ -81,11 +81,13 @@ builder.Services.AddAuthorization(opts =>
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddApiSecurity(builder.Configuration);
 
 var app = builder.Build();
 
 app.UseExceptionHandler();
 app.UseCors();
+app.UseApiSecurity();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -94,12 +96,11 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.MapGet("/", () => "API service is running.");
+app.MapGet("/", () => "API service is running.").AllowAnonymous();
 
 app.MapAuthEndpoints();
 app.MapSystemSettingsEndpoints();
 app.MapUserPreferencesEndpoints();
-app.MapExternalEndpoints();
 app.MapOrganizationsEndpoints();
 app.MapOrganizationSportsEndpoints();
 app.MapTenantSportsEndpoints();

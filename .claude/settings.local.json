@@ -1,43 +1,18 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
+    "defaultMode": "bypassPermissions",
+    "ask": [
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git reset --hard *)",
+      "Bash(rm -rf *)"
+    ],
     "allow": [
-      "Bash(dotnet --version)",
-      "Bash(dotnet --list-sdks)",
-      "Bash(dotnet new *)",
-      "Bash(dotnet sln *)",
-      "Bash(dotnet restore *)",
-      "Bash(dotnet build *)",
-      "Bash(dotnet test *)",
-      "Bash(grep -v \"\\\\.d\\\\.ts$\")",
-      "Read(//c/Users/patri/.nuget/packages/microsoft.aspnetcore.openapi/**)",
-      "Bash(dotnet ef *)",
-      "Bash(dotnet tool *)",
-      "Bash(dotnet clean *)",
-      "Bash(ASPNETCORE_URLS='http://localhost:5999' dotnet run --no-build --no-launch-profile)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5999/)",
-      "Bash(curl -s -w '\\\\n[%{http_code}]\\\\n' -X PUT http://localhost:5999/api/users/856ecd5f-9438-465c-b686-f259d507c0e8 -H 'Content-Type: application/json' -d '{\"name\":\"Ada L.\",\"email\":\"ada.l@example.com\"}')",
-      "Bash(curl -s -w '\\\\n[%{http_code}]\\\\n' -X DELETE http://localhost:5999/api/users/856ecd5f-9438-465c-b686-f259d507c0e8)",
-      "Bash(curl -s -w '\\\\n[%{http_code}]\\\\n' http://localhost:5999/api/users/856ecd5f-9438-465c-b686-f259d507c0e8)",
-      "Bash(curl -s -w \"\\\\n[%{http_code}]\\\\n\" \"http://localhost:5999/api/external-example?base=USD&quote=EUR\" --max-time 15)",
-      "Bash(curl -s -w \"\\\\n[%{http_code}]\\\\n\" \"http://localhost:5999/api/external-example?base=UU&quote=EUR\")",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5999/openapi/v1.json)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5999/openapi.json)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5999/openapi/v1)",
-      "Bash(grep -r \"Email\\\\|Password\\\\|Auth\\\\|Token\\\\|Login\\\\|Register\" --include=\"*.cs\" ./ZonarHub.Application ./ZonarHub.Infrastructure ./ZonarHub.Domain --include-dir=Abstractions)",
-      "Bash(xargs ls *)",
-      "Bash(dotnet add *)",
-      "Bash(dotnet list *)",
-      "Bash(npx tsc *)",
-      "Bash(xargs grep *)",
-      "Bash(supabase --version)",
-      "Bash(supabase init *)",
-      "Bash(claude mcp *)",
-      "Bash(npx skills *)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(k\\) for k in d.get\\('definitions',{}\\).keys\\(\\)]\")"
+      "Bash",
+      "Read",
+      "Edit",
+      "Write"
     ]
-  },
-  "enabledMcpjsonServers": [
-    "supabase"
-  ],
-  "enableAllProjectMcpServers": true
+  }
 }

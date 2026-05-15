@@ -28,7 +28,7 @@ internal sealed class EmailTemplateRepository : IEmailTemplateRepository
 
     public async Task<EmailTemplate?> GetByKeyAsync(string key, CancellationToken cancellationToken = default)
     {
-        var escaped = Uri.EscapeDataString(key.Trim().ToLowerInvariant());
+        var escaped = SupabaseQuery.Value(key.ToLowerInvariant());
         var url = $"{RestPath}?select=*&key=eq.{escaped}&limit=1";
         var rows = await _http.GetFromJsonAsync<List<EmailTemplateRow>>(url, cancellationToken);
         var row = rows?.FirstOrDefault();
@@ -92,7 +92,11 @@ internal sealed class EmailTemplateRepository : IEmailTemplateRepository
 
         if (!string.IsNullOrWhiteSpace(query.KeyContains))
         {
-            parts.Add($"key=ilike.*{Uri.EscapeDataString(query.KeyContains.Trim())}*");
+            var key = SupabaseQuery.ContainsPattern(query.KeyContains);
+            if (key is not null)
+            {
+                parts.Add($"key=ilike.*{key}*");
+            }
         }
 
         if (query.IsActive is { } isActive)

@@ -19,41 +19,50 @@ public static class SportsEndpointsExtensions
 
     public static IEndpointRouteBuilder MapSportsEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup(RoutePrefix).WithTags(Tag);
+        var group = app.MapGroup(RoutePrefix)
+            .WithTags(Tag)
+            .RequireAuthorization("AdminOrAbove");
 
         group.MapGet("/", ListAsync)
             .WithName("ListSports")
             .WithSummary("List all sports")
-            .Produces<PageResult<SportResponse>>(StatusCodes.Status200OK);
+            .Produces<PageResult<SportResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapGet("/{id:guid}", GetByIdAsync)
             .WithName("GetSportById")
             .WithSummary("Get a sport by id")
             .Produces<SportResponse>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPost("/", CreateAsync)
             .WithName("CreateSport")
             .WithSummary("Create a new sport")
             .Produces<SportResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status409Conflict);
-        // TODO: .RequireAuthorization("Admin")
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateSport")
             .WithSummary("Update a sport")
             .Produces<SportResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status404NotFound);
-        // TODO: .RequireAuthorization("Admin")
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapDelete("/{id:guid}", DeleteAsync)
             .WithName("DeleteSport")
             .WithSummary("Delete a sport")
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status404NotFound);
-        // TODO: .RequireAuthorization("Admin")
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         return app;
     }

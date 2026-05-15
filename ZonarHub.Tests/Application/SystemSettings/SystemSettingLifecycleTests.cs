@@ -42,16 +42,24 @@ public class SystemSettingLifecycleTests
     }
 
     [Fact]
-    public async Task Create_DuplicateKeyWithinSameScope_ReturnsConflict()
+    public async Task Create_DuplicateKeyWithinSameScope_UpdatesExistingSetting()
     {
         var h = new SystemSettingsTestHarness(Now);
-        await h.Create.Handle(new CreateSystemSettingCommand("dup", "one", SystemSettingScope.Global, null, null), CancellationToken.None);
+        var first = await h.Create.Handle(
+            new CreateSystemSettingCommand("dup", "one", SystemSettingScope.Global, null, null),
+            CancellationToken.None);
+
+        Assert.True(first.IsSuccess);
+
+        h.Clock.UtcNow = Now.AddMinutes(5);
 
         var duplicate = await h.Create.Handle(
             new CreateSystemSettingCommand("dup", "two", SystemSettingScope.Global, null, null),
             CancellationToken.None);
 
-        Assert.True(duplicate.IsFailure);
-        Assert.Equal("system_settings.key_exists", duplicate.Error.Code);
+        Assert.True(duplicate.IsSuccess);
+        Assert.Equal(first.Value.Id, duplicate.Value.Id);
+        Assert.Equal("two", duplicate.Value.Value);
+        Assert.Equal(Now.AddMinutes(5), duplicate.Value.UpdatedAtUtc);
     }
 }

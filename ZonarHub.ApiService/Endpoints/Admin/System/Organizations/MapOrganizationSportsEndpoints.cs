@@ -13,21 +13,26 @@ public static class OrganizationSportsEndpointsExtensions
 
     public static IEndpointRouteBuilder MapOrganizationSportsEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/admin/organizations/{organizationId:guid}/sports").WithTags(Tag);
+        var group = app.MapGroup("/api/admin/organizations/{organizationId:guid}/sports")
+            .WithTags(Tag)
+            .RequireAuthorization("AdminOrAbove");
 
         group.MapGet("/", GetAsync)
             .WithName("GetOrganizationSports")
             .WithSummary("Get all sports with enabled flag for an organization")
             .Produces<OrganizationSportsResponse>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPut("/", SetAsync)
             .WithName("SetOrganizationSports")
             .WithSummary("Set which sports are enabled for an organization")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status404NotFound);
-        // TODO: .RequireAuthorization("Admin")
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         return app;
     }

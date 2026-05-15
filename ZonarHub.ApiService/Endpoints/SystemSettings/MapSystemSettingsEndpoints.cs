@@ -8,11 +8,7 @@ using ZonarHub.Application.Features.SystemSettings.GetById;
 using ZonarHub.Application.Features.SystemSettings.Update;
 using ZonarHub.Domain.SystemSettings;
 using MediatR;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Routing;
 
 namespace ZonarHub.ApiService.Endpoints.SystemSettings;
 
@@ -23,38 +19,49 @@ public static class SystemSettingsEndpointsExtensions
     public static IEndpointRouteBuilder MapSystemSettingsEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/system-settings")
-            .WithTags(Tag);
+            .WithTags(Tag)
+            .RequireAuthorization("AdminOrAbove");
 
         group.MapPost("/", CreateAsync)
             .WithName("CreateSystemSetting")
             .WithSummary("Create a system/profile setting")
             .Produces<SystemSettingResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapGet("/{id:guid}", GetByIdAsync)
             .WithName("GetSystemSettingById")
             .WithSummary("Get a system setting by id")
             .Produces<SystemSettingResponse>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapGet("/", ListAsync)
             .WithName("GetSystemSettings")
             .WithSummary("List system settings with filters and pagination")
-            .Produces<PageResult<SystemSettingResponse>>(StatusCodes.Status200OK);
+            .Produces<PageResult<SystemSettingResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateSystemSetting")
             .WithSummary("Update a system setting")
             .Produces<SystemSettingResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapDelete("/{id:guid}", DeleteAsync)
             .WithName("DeleteSystemSetting")
             .WithSummary("Delete a system setting")
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         return app;
     }

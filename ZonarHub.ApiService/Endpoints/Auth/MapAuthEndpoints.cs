@@ -9,6 +9,7 @@ using ZonarHub.Application.Features.Auth.ResetPassword;
 using ZonarHub.Application.Features.Auth.SendVerificationCode;
 using ZonarHub.Application.Features.AdminPermissions;
 using ZonarHub.Application.Features.AdminPermissions.GetEffective;
+using ZonarHub.ApiService.Security;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -25,35 +26,43 @@ public static class AuthEndpointsExtensions
 
         group.MapPost("/send-verification-code", SendVerificationCodeAsync)
             .WithName("SendVerificationCode")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiRateLimitPolicies.AnonymousAuth);
 
         group.MapPost("/check-code", CheckCodeAsync)
             .WithName("CheckVerificationCode")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiRateLimitPolicies.AnonymousAuth);
 
         group.MapPost("/register", RegisterAsync)
             .WithName("Register")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiRateLimitPolicies.AnonymousAuth);
 
         group.MapPost("/login", LoginAsync)
             .WithName("Login")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiRateLimitPolicies.AnonymousAuth);
 
         group.MapPost("/forgot-password", ForgotPasswordAsync)
             .WithName("ForgotPassword")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiRateLimitPolicies.AnonymousAuth);
 
         group.MapPost("/reset-password", ResetPasswordAsync)
             .WithName("ResetPassword")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiRateLimitPolicies.AnonymousAuth);
 
         group.MapGet("/check-email", CheckEmailAsync)
             .WithName("CheckEmail")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiRateLimitPolicies.AnonymousAuth);
 
         group.MapGet("/check-phone", CheckPhoneAsync)
             .WithName("CheckPhone")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiRateLimitPolicies.AnonymousAuth);
 
         group.MapGet("/me/effective-permissions", GetEffectivePermissionsAsync)
             .WithName("GetEffectivePermissions")

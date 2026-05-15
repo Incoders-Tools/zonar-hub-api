@@ -28,7 +28,7 @@ internal sealed class UserRepository : IUserRepository
 
     public async Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default)
     {
-        var emailLower = Uri.EscapeDataString(email.Trim().ToLowerInvariant());
+        var emailLower = SupabaseQuery.Value(email.ToLowerInvariant());
         var url = $"{RestPath}?select=*&email=eq.{emailLower}&limit=1";
         var rows = await _http.GetFromJsonAsync<List<UserRow>>(url, cancellationToken);
         var row = rows?.FirstOrDefault();
@@ -37,8 +37,7 @@ internal sealed class UserRepository : IUserRepository
 
     public Task<bool> ExistsByEmailAsync(string email, CancellationToken cancellationToken = default)
     {
-        var emailLower = Uri.EscapeDataString(email.Trim().ToLowerInvariant());
-        return ExistsAsync($"email=eq.{emailLower}", cancellationToken);
+        return ExistsByColumnAsync("email", email.ToLowerInvariant(), cancellationToken);
     }
 
     public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken cancellationToken = default)
@@ -47,8 +46,7 @@ internal sealed class UserRepository : IUserRepository
         if (string.IsNullOrWhiteSpace(normalized))
             return Task.FromResult(false);
 
-        var escaped = Uri.EscapeDataString(normalized);
-        return ExistsAsync($"phone=eq.{escaped}", cancellationToken);
+        return ExistsByColumnAsync("phone", normalized, cancellationToken);
     }
 
     public async Task<User?> GetByRefreshTokenAsync(string token, CancellationToken cancellationToken = default)
@@ -56,7 +54,7 @@ internal sealed class UserRepository : IUserRepository
         if (string.IsNullOrWhiteSpace(token))
             return null;
 
-        var escaped = Uri.EscapeDataString(token.Trim());
+        var escaped = SupabaseQuery.Value(token);
         var url = $"{RestPath}?select=*&refresh_token=eq.{escaped}&limit=1";
         var rows = await _http.GetFromJsonAsync<List<UserRow>>(url, cancellationToken);
         var row = rows?.FirstOrDefault();
@@ -80,13 +78,16 @@ internal sealed class UserRepository : IUserRepository
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
-            var needle = Uri.EscapeDataString(query.Search.Trim());
-            parts.Add($"or=(email.ilike.*{needle}*,full_name.ilike.*{needle}*)");
+            var needle = SupabaseQuery.ContainsPattern(query.Search);
+            if (needle is not null)
+            {
+                parts.Add($"or=(email.ilike.*{needle}*,full_name.ilike.*{needle}*)");
+            }
         }
 
         if (query.Role is { } role)
         {
-            parts.Add($"role=eq.{Uri.EscapeDataString(ToStorageRole(role))}");
+            parts.Add($"role=eq.{SupabaseQuery.Value(ToStorageRole(role))}");
         }
 
         if (query.IsActive is { } isActive)
@@ -141,10 +142,13 @@ internal sealed class UserRepository : IUserRepository
         return Task.CompletedTask;
     }
 
-    private async Task<bool> ExistsAsync(string filter, CancellationToken cancellationToken)
+    private async Task<bool> ExistsByColumnAsync(
+        string columnName,
+        string value,
+        CancellationToken cancellationToken)
     {
         var rows = await _http.GetFromJsonAsync<List<UserExistsRow>>(
-            $"{RestPath}?select=id&{filter}&limit=1",
+            $"{RestPath}?select=id&{columnName}=eq.{SupabaseQuery.Value(value)}&limit=1",
             cancellationToken);
 
         return rows is { Count: > 0 };
