@@ -45,6 +45,45 @@ internal sealed class JwtTokenService : IJwtTokenService
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
+    public string GenerateImpersonationToken(
+        User target,
+        User realUser,
+        Guid sessionId,
+        DateTimeOffset expiresAt)
+    {
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.Secret));
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+
+        // Design §2.1: sub = effective user (target); act.sub/act.email = real sysadmin.
+        var claims = new[]
+        {
+            new Claim(JwtRegisteredClaimNames.Sub, target.Id.Value.ToString()),
+            new Claim(JwtRegisteredClaimNames.Email, target.Email),
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new Claim(ClaimTypes.Role, RoleToString(target.Role)),
+            new Claim("tenantId", target.TenantId?.ToString() ?? string.Empty),
+
+            // RFC 8693 "act" claim — real sysadmin identity.
+            new Claim("act.sub", realUser.Id.Value.ToString()),
+            new Claim("act.email", realUser.Email),
+
+            // Sentinel claims for fast detection without decoding the whole token.
+            new Claim("imp_session_id", sessionId.ToString()),
+            new Claim("imp", "true"),
+        };
+
+        var token = new JwtSecurityToken(
+            issuer: _options.Issuer,
+            audience: _options.Audience,
+            claims: claims,
+            notBefore: now,
+            expires: expiresAt.UtcDateTime,
+            signingCredentials: credentials);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
     public string GenerateRefreshToken() =>
         Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(64));
 

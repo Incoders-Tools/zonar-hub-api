@@ -146,5 +146,12 @@ public sealed class LoginHandlerTests
         public string GenerateRefreshToken() => "refresh-token";
 
         public DateTime AccessTokenExpiresAt() => _expiresAtUtc;
+
+        public string GenerateImpersonationToken(
+            User target,
+            User realUser,
+            Guid sessionId,
+            DateTimeOffset expiresAt) =>
+            $"imp-{target.Id.Value}-as-{realUser.Id.Value}";
     }
 }

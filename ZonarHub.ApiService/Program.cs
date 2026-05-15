@@ -12,6 +12,7 @@ using ZonarHub.ApiService.Endpoints.Admin.Catalog.TournamentModalities;
 using ZonarHub.ApiService.Endpoints.Admin.Catalog.TournamentStatuses;
 using ZonarHub.ApiService.Endpoints.Admin.Catalog.TournamentRules;
 using ZonarHub.ApiService.Endpoints.Admin.System.EmailTemplates;
+using ZonarHub.ApiService.Endpoints.Admin.System.Impersonation;
 using ZonarHub.ApiService.Endpoints.Admin.System.Organizations;
 using ZonarHub.ApiService.Endpoints.Admin.System.Permissions;
 using ZonarHub.ApiService.Endpoints.Admin.System.Roles;
@@ -119,6 +120,7 @@ app.MapAdminRolesEndpoints();
 app.MapAdminDashboardEndpoints();
 app.MapCatalogGendersEndpoints();
 app.MapCatalogCategoriesEndpoints();
+app.MapImpersonationEndpoints();
 
 app.MapDefaultEndpoints();
 
