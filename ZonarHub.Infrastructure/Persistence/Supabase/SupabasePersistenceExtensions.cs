@@ -52,6 +52,7 @@ internal static class SupabasePersistenceExtensions
         services.AddScoped<IGenderRepository, GenderRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();
         services.AddScoped<IRoleRepository, RoleRepository>();
+        services.AddScoped<IImpersonationSessionStore, SupabaseImpersonationSessionStore>();
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
 

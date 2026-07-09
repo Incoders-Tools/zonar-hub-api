@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="MessagePack" Version="3.1.7" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ZonarHub.ApiService\ZonarHub.ApiService.csproj" />
     <ProjectReference Include="..\ZonarHub.Web\ZonarHub.Web.csproj" />
   </ItemGroup>

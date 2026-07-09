@@ -26,6 +26,7 @@ public static class DependencyInjection
         services.AddOptions<FeaturesOptions>()
             .Bind(configuration.GetSection(FeaturesOptions.SectionName));
 
+        services.AddSingleton<IImpersonationFeatureFlags, ImpersonationFeatureFlags>();
         services.AddSingleton<ICacheStore, MemoryCacheStore>();
         services.AddSingleton<IClock, SystemClock>();
 
