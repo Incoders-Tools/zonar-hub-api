@@ -2,6 +2,7 @@ using ZonarHub.ApiService.Endpoints.Common;
 using ZonarHub.Application.Features.UserPreferences;
 using ZonarHub.Application.Features.UserPreferences.Get;
 using ZonarHub.Application.Features.UserPreferences.Set;
+using ZonarHub.Application.Features.UserPreferences.SetPrimaryOrganization;
 using MediatR;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -33,7 +34,25 @@ public static class UserPreferencesEndpointsExtensions
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
+        group.MapPut("/primary-organization", SetPrimaryOrganizationAsync)
+            .RequireAuthorization("AdminOrAbove")
+            .WithName("SetPrimaryOrganization")
+            .WithSummary("Select the authenticated admin's primary organization")
+            .WithDescription("Persists the caller's primary organization without switching active context or changing assignments. The organization must be assigned and active. Ineligible IDs share one error response.")
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status401Unauthorized);
+
         return app;
+    }
+
+    private static async Task<IResult> SetPrimaryOrganizationAsync(
+        [FromBody] SetPrimaryOrganizationRequest body,
+        ISender sender,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new SetPrimaryOrganizationCommand(body.OrganizationId), cancellationToken);
+        return result.Match(() => TypedResults.NoContent());
     }
 
     private static async Task<IResult> GetUserPreferencesAsync(
@@ -87,3 +106,6 @@ public static class UserPreferencesEndpointsExtensions
 /// Request body for setting a user preference.
 /// </summary>
 public sealed record SetUserPreferenceRequest(string Key, string Value);
+
+/// <summary>Organization assigned to the authenticated caller to designate as primary.</summary>
+public sealed record SetPrimaryOrganizationRequest(Guid OrganizationId);
