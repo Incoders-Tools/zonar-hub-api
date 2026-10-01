@@ -22,6 +22,7 @@ public sealed class Complex : Entity<ComplexId>
     public string? CoverImagePath { get; private set; }
     public string? LayoutDiagramPath { get; private set; }
     public bool IsActive { get; private set; }
+    public int CourtCount { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
     public DateTime UpdatedAtUtc { get; private set; }
 
@@ -40,7 +41,8 @@ public sealed class Complex : Entity<ComplexId>
         string? layoutDiagramPath,
         bool isActive,
         DateTime createdAtUtc,
-        DateTime updatedAtUtc)
+        DateTime updatedAtUtc,
+        int courtCount = 0)
     {
         return new Complex(id)
         {
@@ -56,6 +58,7 @@ public sealed class Complex : Entity<ComplexId>
             CoverImagePath = coverImagePath,
             LayoutDiagramPath = layoutDiagramPath,
             IsActive = isActive,
+            CourtCount = courtCount,
             CreatedAtUtc = createdAtUtc,
             UpdatedAtUtc = updatedAtUtc,
         };

@@ -40,7 +40,8 @@ public sealed class UpdateComplexHandler : IRequestHandler<UpdateComplexCommand,
             NormalizeOptional(request.LayoutDiagramPath),
             request.IsActive,
             existing.CreatedAtUtc,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            existing.CourtCount);
 
         await _complexes.UpdateAsync(updated, cancellationToken);
 

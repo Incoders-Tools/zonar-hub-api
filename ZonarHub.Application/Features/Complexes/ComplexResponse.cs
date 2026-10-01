@@ -18,7 +18,8 @@ public sealed record ComplexResponse(
     string? LayoutDiagramPath,
     bool IsActive,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc)
+    DateTime UpdatedAtUtc,
+    int CourtCount)
 {
     public static ComplexResponse FromDomain(Complex c) => new(
         c.Id.Value,
@@ -35,5 +36,6 @@ public sealed record ComplexResponse(
         c.LayoutDiagramPath,
         c.IsActive,
         c.CreatedAtUtc,
-        c.UpdatedAtUtc);
+        c.UpdatedAtUtc,
+        c.CourtCount);
 }

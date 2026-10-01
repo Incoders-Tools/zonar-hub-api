@@ -9,6 +9,7 @@ namespace ZonarHub.Infrastructure.Persistence.Supabase;
 internal sealed class ComplexRepository : IComplexRepository
 {
     private const string RestPath = "/rest/v1/complexes";
+    private const string ReadSelect = "select=*,courts(count)";
 
     private readonly HttpClient _http;
     private readonly SupabaseOperationContext _ops;
@@ -54,7 +55,7 @@ internal sealed class ComplexRepository : IComplexRepository
     public async Task<Complex?> GetByIdAsync(ComplexId id, CancellationToken cancellationToken = default)
     {
         var rows = await _http.GetFromJsonAsync<List<ComplexRow>>(
-            $"{RestPath}?select=*&id=eq.{id.Value}&limit=1",
+            $"{RestPath}?{ReadSelect}&id=eq.{id.Value}&limit=1",
             cancellationToken);
 
         var row = rows?.FirstOrDefault();
@@ -66,7 +67,7 @@ internal sealed class ComplexRepository : IComplexRepository
         CancellationToken cancellationToken = default)
     {
         var rows = await _http.GetFromJsonAsync<List<ComplexRow>>(
-            $"{RestPath}?select=*&organization_id=eq.{organizationId.Value}&order=name.asc",
+            $"{RestPath}?{ReadSelect}&organization_id=eq.{organizationId.Value}&order=name.asc",
             cancellationToken) ?? [];
 
         return rows.Select(ToDomain).ToList();
@@ -132,7 +133,8 @@ internal sealed class ComplexRepository : IComplexRepository
             row.LayoutDiagramPath,
             row.IsActive,
             row.CreatedAtUtc,
-            row.UpdatedAtUtc);
+            row.UpdatedAtUtc,
+            row.Courts?.FirstOrDefault()?.Count ?? 0);
 
     private static ComplexRow ToRow(Complex complex) =>
         new(
@@ -176,5 +178,8 @@ internal sealed class ComplexRepository : IComplexRepository
         [property: JsonPropertyName("layout_diagram_path")] string? LayoutDiagramPath,
         [property: JsonPropertyName("is_active")] bool IsActive,
         [property: JsonPropertyName("created_at_utc")] DateTime CreatedAtUtc,
-        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc);
+        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc,
+        [property: JsonPropertyName("courts"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CourtCountRow[]? Courts = null);
+
+    private sealed record CourtCountRow([property: JsonPropertyName("count")] int Count);
 }
