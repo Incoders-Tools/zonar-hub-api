@@ -12,6 +12,12 @@ namespace ZonarHub.Infrastructure.Persistence.InMemory;
 public sealed class InMemoryImpersonationSessionStore : IImpersonationSessionStore
 {
     private readonly ConcurrentDictionary<Guid, ImpersonationSessionRecord> _sessions = new();
+    private readonly Func<DateTimeOffset> _utcNow;
+
+    public InMemoryImpersonationSessionStore(Func<DateTimeOffset>? utcNow = null)
+    {
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+    }
 
     /// <summary>All audit rows written during the test, inspectable after the act.</summary>
     public List<ImpersonationAuditRecord> AuditRows { get; } = [];
@@ -21,7 +27,7 @@ public sealed class InMemoryImpersonationSessionStore : IImpersonationSessionSto
         if (!_sessions.TryGetValue(sessionId, out var session))
             return Task.FromResult(false);
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _utcNow();
         var active = session.RevokedAt is null && session.ExpiresAt > now;
         return Task.FromResult(active);
     }
@@ -46,7 +52,7 @@ public sealed class InMemoryImpersonationSessionStore : IImpersonationSessionSto
         Guid realUserId,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _utcNow();
         var active = _sessions.Values
             .FirstOrDefault(s => s.RealUserId == realUserId
                                  && s.RevokedAt is null

@@ -39,7 +39,7 @@ public sealed class ImpersonationHandlerTests
         Assert.NotEqual(string.Empty, result.Value.Token);
         Assert.NotEqual(Guid.Empty, result.Value.SessionId);
         Assert.Equal(target.Id.Value, result.Value.Target.Id);
-        Assert.True(result.Value.ExpiresAt > DateTimeOffset.UtcNow);
+        Assert.True(result.Value.ExpiresAt > new DateTimeOffset(h.Clock.UtcNow));
 
         // Session row must exist in the store
         var session = h.SessionStore.FindSession(result.Value.SessionId);
@@ -287,7 +287,7 @@ internal sealed class ImpersonationTestHarness
         var userStore = new InMemoryUserStore();
         Users = new InMemoryUserRepository(userStore);
 
-        SessionStore = new InMemoryImpersonationSessionStore();
+        SessionStore = new InMemoryImpersonationSessionStore(() => new DateTimeOffset(Clock.UtcNow));
 
         var featureFlags = new StubImpersonationFeatureFlags(featureEnabled);
         var jwt = new StubImpersonationJwtTokenService(nowUtc.AddMinutes(30));
