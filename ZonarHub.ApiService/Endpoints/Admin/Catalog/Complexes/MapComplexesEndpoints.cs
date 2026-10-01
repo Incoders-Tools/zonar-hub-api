@@ -6,6 +6,8 @@ using ZonarHub.Application.Features.Complexes.Create;
 using ZonarHub.Application.Features.Complexes.Delete;
 using ZonarHub.Application.Features.Complexes.GetAll;
 using ZonarHub.Application.Features.Complexes.Update;
+using ZonarHub.Application.Features.Complexes.SaveWithCourts;
+using ZonarHub.Application.Abstractions;
 
 namespace ZonarHub.ApiService.Endpoints.Admin.Catalog.Complexes;
 
@@ -19,6 +21,16 @@ public static class ComplexesEndpointsExtensions
         var group = app.MapGroup(RoutePrefix)
             .WithTags(Tag)
             .RequireAuthorization();
+
+        group.MapPost("/save", SaveAsync)
+            .RequireAuthorization("AdminOrAbove")
+            .WithName("SaveComplexWithCourts")
+            .WithSummary("Save a complex and courts atomically")
+            .WithDescription("Creates or updates a complex and supplied courts in one transaction; omitted courts remain unchanged, explicit deleted court IDs are removed. Requires an active administrator authorized for the organization.")
+            .Produces<SavedComplexWithCourtsData>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapGet("/", ListAsync)
             .WithName("ListComplexes")
@@ -52,6 +64,13 @@ public static class ComplexesEndpointsExtensions
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
         return app;
+    }
+
+    private static async Task<IResult> SaveAsync(
+        SaveComplexWithCourtsCommand body, IMediator mediator, CancellationToken ct)
+    {
+        var result = await mediator.Send(body, ct);
+        return result.IsSuccess ? Results.Ok(result.Value) : result.Error.Code == "complexes.aggregate_forbidden" ? Results.Forbid() : result.Error.ToProblem();
     }
 
     private static async Task<IResult> ListAsync(

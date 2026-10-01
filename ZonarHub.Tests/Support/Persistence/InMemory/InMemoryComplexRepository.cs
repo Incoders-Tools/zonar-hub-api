@@ -13,6 +13,9 @@ public sealed class InMemoryComplexRepository : IComplexRepository
         _store = store;
     }
 
+    public Task<SavedComplexWithCourtsData> SaveWithCourtsAsync(SaveComplexWithCourtsData data, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Aggregate transactional writes require a transactional persistence adapter.");
+
     public Task<Complex?> GetByIdAsync(ComplexId id, CancellationToken cancellationToken = default)
     {
         _store.Data.TryGetValue(id, out var complex);

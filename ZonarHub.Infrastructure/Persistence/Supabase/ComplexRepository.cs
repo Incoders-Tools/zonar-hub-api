@@ -19,6 +19,38 @@ internal sealed class ComplexRepository : IComplexRepository
         _ops = ops;
     }
 
+    public async Task<SavedComplexWithCourtsData> SaveWithCourtsAsync(SaveComplexWithCourtsData data, CancellationToken cancellationToken = default)
+    {
+        var body = new
+        {
+            p_complex_id = data.ComplexId,
+            p_organization_id = data.OrganizationId,
+            p_complex = new
+            {
+                name = data.Name, address = data.Address, key = data.Key,
+                location = data.Location, description = data.Description,
+                sort_order = data.SortOrder, preponderance = data.Preponderance,
+                logo_image_path = data.LogoImagePath, cover_image_path = data.CoverImagePath,
+                layout_diagram_path = data.LayoutDiagramPath, is_active = data.IsActive
+            },
+            p_courts = data.Courts.Select(c =>
+            {
+                var court = new Dictionary<string, object?>
+                {
+                    ["id"] = c.Id, ["name"] = c.Name, ["is_active"] = c.IsActive,
+                    ["surface_type"] = c.SurfaceType, ["is_indoor"] = c.IsIndoor
+                };
+                if (c.SportIds is not null) court["sport_ids"] = c.SportIds;
+                return court;
+            }),
+            p_delete_court_ids = data.DeleteCourtIds
+        };
+        using var response = await _http.PostAsJsonAsync("/rest/v1/rpc/save_complex_with_courts", body, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<SavedComplexWithCourtsData>(cancellationToken)
+            ?? throw new InvalidOperationException("Aggregate RPC returned no result.");
+    }
+
     public async Task<Complex?> GetByIdAsync(ComplexId id, CancellationToken cancellationToken = default)
     {
         var rows = await _http.GetFromJsonAsync<List<ComplexRow>>(

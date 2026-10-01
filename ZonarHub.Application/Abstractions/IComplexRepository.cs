@@ -5,6 +5,8 @@ namespace ZonarHub.Application.Abstractions;
 
 public interface IComplexRepository
 {
+    Task<SavedComplexWithCourtsData> SaveWithCourtsAsync(SaveComplexWithCourtsData data, CancellationToken cancellationToken = default);
+
     Task<Complex?> GetByIdAsync(ComplexId id, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<Complex>> ListByOrganizationAsync(
