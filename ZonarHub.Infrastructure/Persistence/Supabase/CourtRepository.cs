@@ -22,7 +22,7 @@ internal sealed class CourtRepository : ICourtRepository
     public async Task<IReadOnlyList<Court>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         var rows = await _http.GetFromJsonAsync<List<CourtRow>>(
-            $"{RestPath}?select=*&order=name.asc",
+            $"{RestPath}?select=*,court_sports(sport_id)&order=name.asc",
             cancellationToken) ?? [];
 
         return rows.Select(ToDomain).ToList();
@@ -31,7 +31,7 @@ internal sealed class CourtRepository : ICourtRepository
     public async Task<Court?> GetByIdAsync(CourtId id, CancellationToken cancellationToken = default)
     {
         var rows = await _http.GetFromJsonAsync<List<CourtRow>>(
-            $"{RestPath}?select=*&id=eq.{id.Value}",
+            $"{RestPath}?select=*,court_sports(sport_id)&id=eq.{id.Value}",
             cancellationToken) ?? [];
 
         return rows.FirstOrDefault() is { } row ? ToDomain(row) : null;
@@ -42,7 +42,7 @@ internal sealed class CourtRepository : ICourtRepository
         CancellationToken cancellationToken = default)
     {
         var rows = await _http.GetFromJsonAsync<List<CourtRow>>(
-            $"{RestPath}?select=*&complex_id=eq.{complexId.Value}&order=name.asc",
+            $"{RestPath}?select=*,court_sports(sport_id)&complex_id=eq.{complexId.Value}&order=name.asc",
             cancellationToken) ?? [];
 
         return rows.Select(ToDomain).ToList();
@@ -72,9 +72,9 @@ internal sealed class CourtRepository : ICourtRepository
             new ComplexId(row.ComplexId),
             row.Name,
             row.IsActive,
-            row.CreatedAtUtc);
+            row.CreatedAtUtc, row.IsIndoor, row.SurfaceType, row.CourtSports?.Select(link => link.SportId).ToArray());
 
-    private static CourtRow ToRow(Court court) =>
+    private static CourtWriteRow ToRow(Court court) =>
         new(
             court.Id.Value,
             court.ComplexId.Value,
@@ -82,7 +82,7 @@ internal sealed class CourtRepository : ICourtRepository
             court.IsActive,
             court.CreatedAtUtc);
 
-    private static async Task ExecuteAddAsync(HttpClient http, CourtRow row, CancellationToken ct)
+    private static async Task ExecuteAddAsync(HttpClient http, CourtWriteRow row, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, RestPath);
         req.Headers.Add("Prefer", "return=minimal");
@@ -91,7 +91,7 @@ internal sealed class CourtRepository : ICourtRepository
         resp.EnsureSuccessStatusCode();
     }
 
-    private static async Task ExecuteUpdateAsync(HttpClient http, Guid id, CourtRow row, CancellationToken ct)
+    private static async Task ExecuteUpdateAsync(HttpClient http, Guid id, CourtWriteRow row, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Patch, $"{RestPath}?id=eq.{id}");
         req.Headers.Add("Prefer", "return=minimal");
@@ -107,10 +107,22 @@ internal sealed class CourtRepository : ICourtRepository
         resp.EnsureSuccessStatusCode();
     }
 
-    private sealed record CourtRow(
+    private sealed record CourtWriteRow(
         [property: JsonPropertyName("id")] Guid Id,
         [property: JsonPropertyName("complex_id")] Guid ComplexId,
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("is_active")] bool IsActive,
         [property: JsonPropertyName("created_at_utc")] DateTime CreatedAtUtc);
+
+    private sealed record CourtRow(
+        [property: JsonPropertyName("id")] Guid Id,
+        [property: JsonPropertyName("complex_id")] Guid ComplexId,
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("is_active")] bool IsActive,
+        [property: JsonPropertyName("created_at_utc")] DateTime CreatedAtUtc,
+        [property: JsonPropertyName("is_indoor")] bool IsIndoor = false,
+        [property: JsonPropertyName("surface_type")] string? SurfaceType = null,
+        [property: JsonPropertyName("court_sports")] IReadOnlyList<CourtSportRow>? CourtSports = null);
+
+    private sealed record CourtSportRow([property: JsonPropertyName("sport_id")] Guid SportId);
 }

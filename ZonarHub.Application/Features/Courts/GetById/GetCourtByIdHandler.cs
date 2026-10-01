@@ -28,7 +28,7 @@ internal sealed class GetCourtByIdHandler : IRequestHandler<GetCourtByIdQuery, R
             court.ComplexId.Value,
             court.Name,
             court.IsActive,
-            court.CreatedAtUtc);
+            court.CreatedAtUtc, court.IsIndoor, court.SurfaceType, court.SportIds);
 
         return Result.Success(dto);
     }

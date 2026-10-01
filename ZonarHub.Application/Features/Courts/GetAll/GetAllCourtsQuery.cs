@@ -9,4 +9,7 @@ public sealed record CourtDto(
     Guid ComplexId,
     string Name,
     bool IsActive,
-    DateTime CreatedAtUtc);
+    DateTime CreatedAtUtc,
+    bool IsIndoor = false,
+    string? SurfaceType = null,
+    IReadOnlyList<Guid>? SportIds = null);

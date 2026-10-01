@@ -14,13 +14,19 @@ public sealed class Court : Entity<CourtId>
     public string Name { get; private set; } = string.Empty;
     public bool IsActive { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
+    public bool IsIndoor { get; private set; }
+    public string? SurfaceType { get; private set; }
+    public IReadOnlyList<Guid> SportIds { get; private set; } = [];
 
     public static Court Reconstitute(
         CourtId id,
         ComplexId complexId,
         string name,
         bool isActive,
-        DateTime createdAtUtc)
+        DateTime createdAtUtc,
+        bool isIndoor = false,
+        string? surfaceType = null,
+        IReadOnlyList<Guid>? sportIds = null)
     {
         return new Court(id)
         {
@@ -28,6 +34,9 @@ public sealed class Court : Entity<CourtId>
             Name = name,
             IsActive = isActive,
             CreatedAtUtc = createdAtUtc,
+            IsIndoor = isIndoor,
+            SurfaceType = surfaceType,
+            SportIds = sportIds?.ToArray() ?? [],
         };
     }
 

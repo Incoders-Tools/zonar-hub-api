@@ -23,7 +23,7 @@ internal sealed class GetCourtsByComplexIdHandler : IRequestHandler<GetCourtsByC
             c.ComplexId.Value,
             c.Name,
             c.IsActive,
-            c.CreatedAtUtc))
+            c.CreatedAtUtc, c.IsIndoor, c.SurfaceType, c.SportIds))
             .ToList();
     }
 }

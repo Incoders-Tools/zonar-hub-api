@@ -21,7 +21,7 @@ internal sealed class GetAllCourtsHandler : IRequestHandler<GetAllCourtsQuery, I
             c.ComplexId.Value,
             c.Name,
             c.IsActive,
-            c.CreatedAtUtc))
+            c.CreatedAtUtc, c.IsIndoor, c.SurfaceType, c.SportIds))
             .ToList();
     }
 }
