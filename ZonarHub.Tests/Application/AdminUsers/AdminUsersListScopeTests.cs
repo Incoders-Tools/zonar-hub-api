@@ -329,6 +329,81 @@ public class AdminUsersListScopeTests
     }
 
     [Fact]
+    public async Task TenantAdmin_OrganizationScope_ExcludesSameTenantSystemAdminsBeforePaging()
+    {
+        var h = new AdminUsersTestHarness(Now);
+        var tenant = Guid.NewGuid();
+        var org = await h.SeedOrganizationAsync(tenant, "Org A");
+        var caller = await SeedMemberAsync(h, tenant, "m-admin@zonarhub.dev", primaryOrganizationId: org.Id.Value, role: UserRole.Admin);
+
+        // System administrators sort first by email so a post-page filter would return a short page.
+        await SeedMemberAsync(h, tenant, "a-sys-primary@zonarhub.dev", primaryOrganizationId: org.Id.Value, role: UserRole.SystemAdmin);
+        await SeedMemberAsync(h, tenant, "a-sys-assigned@zonarhub.dev", assignedOrganizationIds: [org.Id.Value], role: UserRole.SystemAdmin);
+        var assigned = await SeedMemberAsync(h, tenant, "m-assigned@zonarhub.dev", assignedOrganizationIds: [org.Id.Value]);
+        var primary = await SeedMemberAsync(h, tenant, "m-primary@zonarhub.dev", primaryOrganizationId: org.Id.Value);
+        h.CurrentUser.Authenticate(caller.Id.Value, caller.Email);
+
+        var firstPage = await h.List.Handle(
+            new GetAdminUsersQuery(Filter(page: 1, pageSize: 2), AdminUserListScopes.Organization, org.Id.Value),
+            CancellationToken.None);
+        var secondPage = await h.List.Handle(
+            new GetAdminUsersQuery(Filter(page: 2, pageSize: 2), AdminUserListScopes.Organization, org.Id.Value),
+            CancellationToken.None);
+
+        Assert.True(firstPage.IsSuccess);
+        Assert.True(secondPage.IsSuccess);
+        Assert.Equal(3, firstPage.Value.TotalCount);
+        Assert.Equal(3, secondPage.Value.TotalCount);
+        Assert.Equal(new[] { caller.Id.Value, assigned.Id.Value }, firstPage.Value.Items.Select(item => item.Id).ToArray());
+        Assert.Equal(primary.Id.Value, Assert.Single(secondPage.Value.Items).Id);
+    }
+
+    [Fact]
+    public async Task TenantAdmin_OrganizationScope_SystemAdminRoleFilter_ReturnsEmpty()
+    {
+        var h = new AdminUsersTestHarness(Now);
+        var tenant = Guid.NewGuid();
+        var org = await h.SeedOrganizationAsync(tenant, "Org A");
+        var caller = await SeedMemberAsync(h, tenant, "admin@zonarhub.dev", primaryOrganizationId: org.Id.Value, role: UserRole.Admin);
+        await SeedMemberAsync(h, tenant, "sys-primary@zonarhub.dev", primaryOrganizationId: org.Id.Value, role: UserRole.SystemAdmin);
+        await SeedMemberAsync(h, tenant, "sys-assigned@zonarhub.dev", assignedOrganizationIds: [org.Id.Value], role: UserRole.SystemAdmin);
+        h.CurrentUser.Authenticate(caller.Id.Value, caller.Email);
+
+        var result = await h.List.Handle(
+            new GetAdminUsersQuery(
+                new AdminUserFilter(null, "role001", null, 1, 20),
+                AdminUserListScopes.Organization,
+                org.Id.Value),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(result.Value.Items);
+        Assert.Equal(0, result.Value.TotalCount);
+    }
+
+    [Fact]
+    public async Task SystemAdmin_OrganizationScope_IncludesSameTenantSystemAdminMembers()
+    {
+        var h = new AdminUsersTestHarness(Now);
+        var tenant = Guid.NewGuid();
+        var org = await h.SeedOrganizationAsync(tenant, "Org A");
+        var caller = await SeedMemberAsync(h, tenant, "root@zonarhub.dev", primaryOrganizationId: org.Id.Value, role: UserRole.SystemAdmin);
+        var sysAssigned = await SeedMemberAsync(h, tenant, "sys-assigned@zonarhub.dev", assignedOrganizationIds: [org.Id.Value], role: UserRole.SystemAdmin);
+        var member = await SeedMemberAsync(h, tenant, "member@zonarhub.dev", primaryOrganizationId: org.Id.Value);
+        h.CurrentUser.Authenticate(caller.Id.Value, caller.Email);
+
+        var result = await h.List.Handle(
+            new GetAdminUsersQuery(Filter(), AdminUserListScopes.Organization, org.Id.Value),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, result.Value.TotalCount);
+        Assert.Equal(
+            new[] { member.Id.Value, caller.Id.Value, sysAssigned.Id.Value },
+            result.Value.Items.Select(item => item.Id).ToArray());
+    }
+
+    [Fact]
     public async Task TenantAdmin_List_HidesForeignTenantPrimaryOrganization()
     {
         var h = new AdminUsersTestHarness(Now);

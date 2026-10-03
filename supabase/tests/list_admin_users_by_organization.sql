@@ -45,9 +45,11 @@ INSERT INTO public.organizations (id, tenant_id, display_name, type, created_by_
 VALUES
  ('f1000000-0000-0000-0000-000000000000', 'e1000000-0000-0000-0000-000000000000', 'Org one', 'estandar', 'e1000000-0000-0000-0000-000000000001'),
  ('f2000000-0000-0000-0000-000000000000', 'e1000000-0000-0000-0000-000000000000', 'Org two', 'estandar', 'e1000000-0000-0000-0000-000000000001'),
- ('f3000000-0000-0000-0000-000000000000', 'e2000000-0000-0000-0000-000000000000', 'Org three', 'estandar', 'e2000000-0000-0000-0000-000000000001');
+ ('f3000000-0000-0000-0000-000000000000', 'e2000000-0000-0000-0000-000000000000', 'Org three', 'estandar', 'e2000000-0000-0000-0000-000000000001'),
+ ('f4000000-0000-0000-0000-000000000000', 'e1000000-0000-0000-0000-000000000000', 'Org four', 'estandar', 'e1000000-0000-0000-0000-000000000001');
 -- Tenant one: primary, secondary, assignment-only, other-org, unassigned, assigned-elsewhere,
 -- inactive viewer, and a literal wildcard name. Tenant two: cross-tenant assignee and unassigned.
+-- Org four mixes same-tenant system admins (primary, assignment-only, unassigned) with members.
 INSERT INTO public.users (id, email, full_name, password_hash, role, role_id, tenant_id, organization_id, is_active)
 VALUES
  ('d0000000-0000-0000-0000-000000000001', 'a@aus.test', 'Ana Primary', 'hash-a', 'admin', 'role002', 'e1000000-0000-0000-0000-000000000000', 'f1000000-0000-0000-0000-000000000000', true),
@@ -59,7 +61,12 @@ VALUES
  ('d0000000-0000-0000-0000-000000000007', 'g@aus.test', 'Gina Inactive', 'hash-g', 'viewer', 'role003', 'e1000000-0000-0000-0000-000000000000', 'f1000000-0000-0000-0000-000000000000', false),
  ('d0000000-0000-0000-0000-000000000008', 'h@aus.test', '100% Pro', 'hash-h', 'user', 'role005', 'e1000000-0000-0000-0000-000000000000', 'f1000000-0000-0000-0000-000000000000', true),
  ('d0000000-0000-0000-0000-000000000009', 'x@aus.test', 'Xavi Foreign', 'hash-x', 'user', 'role005', 'e2000000-0000-0000-0000-000000000000', 'f3000000-0000-0000-0000-000000000000', true),
- ('d0000000-0000-0000-0000-000000000010', 'y@aus.test', 'Yago Unassigned', 'hash-y', 'user', 'role005', 'e2000000-0000-0000-0000-000000000000', NULL, true);
+ ('d0000000-0000-0000-0000-000000000010', 'y@aus.test', 'Yago Unassigned', 'hash-y', 'user', 'role005', 'e2000000-0000-0000-0000-000000000000', NULL, true),
+ ('d0000000-0000-0000-0000-000000000011', 'j@aus.test', 'Juan Root Unassigned', 'hash-j', 'system_admin', 'role001', 'e1000000-0000-0000-0000-000000000000', NULL, true),
+ ('d0000000-0000-0000-0000-000000000012', 'k@aus.test', 'Kim Root Primary', 'hash-k', 'system_admin', 'role001', 'e1000000-0000-0000-0000-000000000000', 'f4000000-0000-0000-0000-000000000000', true),
+ ('d0000000-0000-0000-0000-000000000013', 'l@aus.test', 'Lia Root Assigned', 'hash-l', 'system_admin', 'role001', 'e1000000-0000-0000-0000-000000000000', NULL, true),
+ ('d0000000-0000-0000-0000-000000000014', 'm@aus.test', 'Mia Primary', 'hash-m', 'user', 'role005', 'e1000000-0000-0000-0000-000000000000', 'f4000000-0000-0000-0000-000000000000', true),
+ ('d0000000-0000-0000-0000-000000000015', 'n@aus.test', 'Nora Assigned', 'hash-n', 'user', 'role005', 'e1000000-0000-0000-0000-000000000000', NULL, true);
 INSERT INTO public.user_organization_assignments (user_id, organization_id)
 VALUES
  ('d0000000-0000-0000-0000-000000000001', 'f1000000-0000-0000-0000-000000000000'),
@@ -67,7 +74,9 @@ VALUES
  ('d0000000-0000-0000-0000-000000000002', 'f2000000-0000-0000-0000-000000000000'),
  ('d0000000-0000-0000-0000-000000000003', 'f1000000-0000-0000-0000-000000000000'),
  ('d0000000-0000-0000-0000-000000000006', 'f2000000-0000-0000-0000-000000000000'),
- ('d0000000-0000-0000-0000-000000000009', 'f1000000-0000-0000-0000-000000000000');
+ ('d0000000-0000-0000-0000-000000000009', 'f1000000-0000-0000-0000-000000000000'),
+ ('d0000000-0000-0000-0000-000000000013', 'f4000000-0000-0000-0000-000000000000'),
+ ('d0000000-0000-0000-0000-000000000015', 'f4000000-0000-0000-0000-000000000000');
 
 CREATE FUNCTION pg_temp.assert_page(label text, result jsonb, expected_total integer, expected_emails text)
 RETURNS void LANGUAGE plpgsql AS $$
@@ -88,6 +97,7 @@ DO $$
 DECLARE
  org_one constant uuid := 'f1000000-0000-0000-0000-000000000000';
  org_two constant uuid := 'f2000000-0000-0000-0000-000000000000';
+ org_four constant uuid := 'f4000000-0000-0000-0000-000000000000';
  tenant_one constant uuid := 'e1000000-0000-0000-0000-000000000000';
  result jsonb;
 BEGIN
@@ -126,6 +136,16 @@ BEGIN
  PERFORM pg_temp.assert_page('inactive filter', public.list_admin_users_by_organization(org_one, NULL, NULL, NULL, NULL, false, 0, 50), 1, 'g@aus.test');
  PERFORM pg_temp.assert_page('active filter', public.list_admin_users_by_organization(org_one, tenant_one, tenant_one, NULL, 'user', true, 0, 50), 4, 'b@aus.test,c@aus.test,e@aus.test,h@aus.test');
 
+ -- Tenant-scoped lists exclude same-tenant system admins before counting and paging;
+ -- the unscoped system admin list keeps them.
+ PERFORM pg_temp.assert_page('sysadmin sees system admins', public.list_admin_users_by_organization(org_four, NULL, NULL, NULL, NULL, NULL, 0, 50), 4, 'k@aus.test,l@aus.test,m@aus.test,n@aus.test');
+ PERFORM pg_temp.assert_page('sysadmin system admin role', public.list_admin_users_by_organization(org_four, NULL, NULL, NULL, 'system_admin', NULL, 0, 50), 2, 'k@aus.test,l@aus.test');
+ PERFORM pg_temp.assert_page('tenant filter hides system admins', public.list_admin_users_by_organization(org_four, tenant_one, NULL, NULL, NULL, NULL, 0, 50), 2, 'm@aus.test,n@aus.test');
+ PERFORM pg_temp.assert_page('tenant admin hides system admins page 1', public.list_admin_users_by_organization(org_four, tenant_one, tenant_one, NULL, NULL, NULL, 0, 2), 3, 'e@aus.test,m@aus.test');
+ PERFORM pg_temp.assert_page('tenant admin hides system admins page 2', public.list_admin_users_by_organization(org_four, tenant_one, tenant_one, NULL, NULL, NULL, 2, 2), 3, 'n@aus.test');
+ PERFORM pg_temp.assert_page('tenant admin system admin role', public.list_admin_users_by_organization(org_four, tenant_one, tenant_one, NULL, 'system_admin', NULL, 0, 50), 0, '');
+ PERFORM pg_temp.assert_page('tenant admin system admin search', public.list_admin_users_by_organization(org_four, tenant_one, tenant_one, 'root', NULL, NULL, 0, 50), 0, '');
+
  -- Invalid arguments fail instead of returning an unscoped or unbounded list.
  BEGIN
   PERFORM public.list_admin_users_by_organization(NULL, NULL, NULL, NULL, NULL, NULL, 0, 10);
@@ -145,6 +165,6 @@ BEGIN
  EXCEPTION WHEN raise_exception THEN
   IF SQLERRM <> 'invalid page' THEN RAISE; END IF;
  END;
- RAISE NOTICE 'membership, paging/count, multi-org, tenant isolation, unassigned exception, filters, literal search, invalid args: passed';
+ RAISE NOTICE 'membership, paging/count, multi-org, tenant isolation, unassigned exception, filters, literal search, tenant system admin exclusion, invalid args: passed';
 END $$;
 RESET ROLE;

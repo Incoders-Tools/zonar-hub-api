@@ -98,6 +98,12 @@ public sealed class InMemoryUserRepository : IUserRepository
         if (query.Membership is { } membership)
         {
             source = source.Where(u => IsMember(u, membership));
+
+            // Mirrors the membership RPC: tenant-scoped lists never include system administrators.
+            if (query.TenantId is not null)
+            {
+                source = source.Where(u => u.Role != UserRole.SystemAdmin);
+            }
         }
 
         var filtered = source
