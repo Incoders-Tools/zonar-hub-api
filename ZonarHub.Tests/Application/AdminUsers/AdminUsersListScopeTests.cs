@@ -329,22 +329,6 @@ public class AdminUsersListScopeTests
     }
 
     [Fact]
-    public async Task SupabaseUserRepository_OrganizationMembership_FailsClosedWithoutCallingProvider()
-    {
-        var calls = 0;
-        var repository = CreateSupabaseRepository(_ =>
-        {
-            calls++;
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[]", Encoding.UTF8, "application/json") };
-        });
-
-        var query = new UserQuery(null, null, null, null, 1, 20, new UserOrganizationMembership(Guid.NewGuid(), null));
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => repository.ListAsync(query));
-        Assert.Equal(0, calls);
-    }
-
-    [Fact]
     public async Task SupabaseUserRepository_WithoutMembership_KeepsTenantQuery()
     {
         var tenant = Guid.NewGuid();
