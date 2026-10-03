@@ -1,0 +1,64 @@
+name: PR validation
+
+# Promotion gate for `main`: only the same-repository `dev` branch may be
+# merged into `main`, and the PR body must reference a local issue (`#N`).
+# The issue is not looked up: this check proves a reference exists, not that
+# the issue exists or was approved. Branch protection must separately require
+# the `promotion-policy` status for this gate to block merges.
+#
+# Trust model: `pull_request_target` runs this file as it exists on the base
+# branch (`main`), so a PR cannot weaken the gate by editing it. That trusted
+# context is safe only because the job never checks out or fetches PR code,
+# uses no actions, secrets, network or token scopes, and treats every PR field
+# as data passed through env to Python.
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+# The gate reads only the event payload, so the token needs no scopes.
+permissions: {}
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  promotion-policy:
+    name: promotion-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Untrusted PR fields are passed only through env and read by Python,
+      # never interpolated into a shell script, and never echoed back.
+      - name: Enforce dev to main promotion policy
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        shell: python
+        run: |
+          import os
+          import re
+          import sys
+
+          env = os.environ
+          base_repo = env.get("BASE_REPO", "")
+          errors = []
+          if not base_repo or env.get("HEAD_REPO", "") != base_repo:
+              errors.append("Pull requests to main must come from the same repository, not a fork.")
+          if env.get("HEAD_REF", "") != "dev":
+              errors.append("The source branch of a pull request to main must be dev.")
+          if env.get("BASE_REF", "") != "main":
+              errors.append("This gate only accepts main as the target branch.")
+          if not re.search(r"(?<![\w/&#])#[1-9][0-9]*\b", env.get("PR_BODY", "")):
+              errors.append("The pull request body must contain a local issue reference such as #123.")
+
+          for error in errors:
+              print(f"::error::{error}")
+          if errors:
+              sys.exit(1)
+          print("Promotion policy satisfied: dev to main with an issue reference.")

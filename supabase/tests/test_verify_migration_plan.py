@@ -21,6 +21,7 @@ import verify_migration_plan as vmp  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 DEPLOY_WORKFLOW = WORKFLOWS / "deploy-supabase-migrations.yml"
+PR_WORKFLOW = WORKFLOWS / "pr-validation.yml"
 # sha256 of supabase_2.109.0_linux_amd64.tar.gz, from the official v2.109.0 checksums.txt.
 CLI_SHA256 = "d96c1ca0ef1f89582f6f001c306547d709644d35fa298c08600323d4eb9fdcf2"
 
@@ -460,6 +461,171 @@ class DeployWorkflowTests(unittest.TestCase):
                               "SUPABASE_DB_URL", "SUPABASE_ACCESS_TOKEN", "supabase-production"):
                 with self.subTest(workflow=path.name, forbidden=forbidden):
                     self.assertNotIn(forbidden, text)
+
+
+def top_level_block(text, key):
+    """Returns the lines nested under a top-level workflow key."""
+    match = re.search(rf"^{re.escape(key)}:(.*?)(?=^\S|\Z)", text, re.M | re.S)
+    if not match:
+        raise AssertionError(f"top-level key {key!r} not found")
+    return match.group(1)
+
+
+def run_script(step):
+    """Returns the dedented `run: |` body of a step."""
+    match = re.search(r"^        run: \|\n((?:^(?: {10}.*)?\n)+)", step, re.M)
+    if not match:
+        raise AssertionError("step has no block run script")
+    return "\n".join(line[10:] for line in match.group(1).splitlines()) + "\n"
+
+
+REPO = "incoders/zonar-hub-api"
+POLICY_STEP = "Enforce dev to main promotion policy"
+
+
+class PrValidationWorkflowTests(unittest.TestCase):
+    """Static assertions on the PR gate; they need no network or secrets."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = strip_comments(PR_WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_runs_trusted_base_branch_definition_for_every_change_that_targets_main(self):
+        # `pull_request_target` evaluates the workflow file from the base branch, so a
+        # same-repository `dev` PR cannot weaken the gate by editing this file.
+        trigger = top_level_block(self.text, "on")
+        self.assertEqual(re.findall(r"(?m)^  (\w+):", trigger), ["pull_request_target"])
+        self.assertRegex(trigger, r"(?m)^    branches: \[main\]$")
+        types = re.search(r"(?m)^    types: \[(.*)\]$", trigger).group(1)
+        self.assertEqual({item.strip() for item in types.split(",")},
+                         {"opened", "edited", "synchronize", "reopened", "ready_for_review"})
+
+    def test_never_fetches_or_runs_pull_request_code(self):
+        # With a base-branch trigger, checking out or fetching head code would run
+        # attacker-controlled files in a trusted context; only the payload is read.
+        for forbidden in ("checkout", "head.sha", "merge_commit_sha", "refs/pull/",
+                          "git fetch", "git clone", "ref:", "repository:", "workflow_run",
+                          "pip install", "npm ", "cache", "artifact", "GITHUB_ENV",
+                          "GITHUB_OUTPUT", "GITHUB_PATH"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.text)
+
+    def test_token_has_no_permissions(self):
+        self.assertRegex(self.text, r"(?m)^permissions: \{\}$")
+        self.assertEqual(len(re.findall(r"permissions:", self.text)), 1)
+        self.assertNotIn("write", self.text)
+
+    def test_exposes_one_stable_status_check(self):
+        jobs = top_level_block(self.text, "jobs")
+        self.assertEqual(re.findall(r"(?m)^  ([\w-]+):$", jobs), ["promotion-policy"])
+        self.assertRegex(jobs, r"(?m)^    name: promotion-policy$")
+        self.assertRegex(jobs, r"(?m)^    timeout-minutes: \d+$")
+
+    def test_uses_no_secrets_actions_checkout_or_network(self):
+        for forbidden in ("secrets.", "GITHUB_TOKEN", "github.token", "uses:", "curl", "wget",
+                          "gh ", "urllib", "http.client", "socket", "subprocess"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.text)
+        self.assertNotRegex(self.text, r"\bimport\s+requests\b")
+
+    def test_untrusted_pull_request_data_reaches_the_step_only_through_env(self):
+        step = step_block(self.text, POLICY_STEP)
+        self.assertRegex(step, r"(?m)^        shell: python$")
+        self.assertNotIn("${{", run_script(step))
+        expressions = re.findall(r"(?m)^(.*)\$\{\{\s*github\.event\.pull_request\.(\S+)", self.text)
+        self.assertTrue(expressions)
+        for prefix, field in expressions:
+            with self.subTest(field=field):
+                if prefix == "  group: pr-validation-":
+                    # The numeric PR id only names the concurrency group.
+                    self.assertEqual(field, "number")
+                else:
+                    self.assertRegex(prefix, r"^          [A-Z_]+: $")
+
+
+class PromotionPolicyTests(unittest.TestCase):
+    """Runs the gate's exact Python script against PR event shapes."""
+
+    @classmethod
+    def setUpClass(cls):
+        text = PR_WORKFLOW.read_text(encoding="utf-8")
+        cls.script = run_script(step_block(text, POLICY_STEP))
+
+    def run_policy(self, **overrides):
+        values = {"BASE_REF": "main", "HEAD_REF": "dev", "HEAD_REPO": REPO,
+                  "BASE_REPO": REPO, "PR_BODY": "Promotes the release.\n\nCloses #42"}
+        values.update(overrides)
+        env = {key: value for key, value in os.environ.items()
+               if key not in {"BASE_REF", "HEAD_REF", "HEAD_REPO", "BASE_REPO", "PR_BODY"}}
+        env.update({key: value for key, value in values.items() if value is not None})
+        with tempfile.TemporaryDirectory() as workdir:
+            completed = subprocess.run([sys.executable, "-c", self.script], env=env, cwd=workdir,
+                                       capture_output=True, text=True, check=False)
+            self.assertEqual(os.listdir(workdir), [], "policy must not write files")
+        return completed
+
+    def assert_rejected(self, reason, **overrides):
+        completed = self.run_policy(**overrides)
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertIn("::error::", completed.stdout)
+        self.assertIn(reason, completed.stdout)
+        return completed
+
+    def test_accepts_same_repository_dev_to_main_with_issue_reference(self):
+        completed = self.run_policy()
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertNotIn("::error::", completed.stdout)
+        self.assertNotIn("approved", completed.stdout.lower())
+
+    def test_accepts_bare_issue_reference_anywhere_in_body(self):
+        for body in ("#7", "Refs: #7.", "Summary\n\n- part of (#123)"):
+            with self.subTest(body=body):
+                self.assertEqual(self.run_policy(PR_BODY=body).returncode, 0)
+
+    def test_rejects_forked_dev_branch(self):
+        self.assert_rejected("same repository", HEAD_REPO="attacker/zonar-hub-api")
+
+    def test_rejects_missing_head_repository(self):
+        self.assert_rejected("same repository", HEAD_REPO=None)
+        self.assert_rejected("same repository", HEAD_REPO="")
+
+    def test_rejects_missing_base_repository(self):
+        self.assert_rejected("same repository", BASE_REPO=None, HEAD_REPO=None)
+
+    def test_rejects_source_other_than_dev(self):
+        for head in ("feature/x", "Dev", "dev2", "", None):
+            with self.subTest(head=head):
+                self.assert_rejected("source branch", HEAD_REF=head)
+
+    def test_rejects_base_other_than_main(self):
+        for base in ("dev", "main2", "", None):
+            with self.subTest(base=base):
+                self.assert_rejected("target branch", BASE_REF=base)
+
+    def test_rejects_body_without_local_issue_reference(self):
+        for body in (None, "", "No issue here", "## Summary", "See other/repo#5", "#0",
+                     "&#35;12", "issue#12", "https://example.com/#12"):
+            with self.subTest(body=body):
+                self.assert_rejected("issue reference", PR_BODY=body)
+
+    def test_reports_every_violation_at_once(self):
+        completed = self.assert_rejected("same repository", HEAD_REPO="fork/x", HEAD_REF="main",
+                                         BASE_REF="dev", PR_BODY="")
+        for reason in ("source branch", "target branch", "issue reference"):
+            self.assertIn(reason, completed.stdout)
+
+    def test_hostile_body_and_branch_are_neither_executed_nor_echoed(self):
+        payload = ('"; touch pwned; echo "$(touch pwned)`touch pwned`${{ secrets.X }}\n'
+                   "::set-output name=x::y\n::stop-commands::tok\n")
+        accepted = self.run_policy(PR_BODY=payload + "Closes #9")
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        rejected = self.assert_rejected("issue reference", PR_BODY=payload,
+                                        HEAD_REF="dev$(touch pwned)")
+        for completed in (accepted, rejected):
+            output = completed.stdout + completed.stderr
+            for fragment in ("pwned", "set-output", "stop-commands", "secrets.X"):
+                with self.subTest(fragment=fragment):
+                    self.assertNotIn(fragment, output)
 
 
 if __name__ == "__main__":
