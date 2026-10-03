@@ -68,6 +68,12 @@ internal sealed class UserRepository : IUserRepository
     {
         if (query.Membership is { } membership)
         {
+            // The membership RPC has no role-exclusion argument yet; fail closed rather than leak the role.
+            if (query.ExcludeRole is not null)
+            {
+                throw new NotSupportedException("Excluding a role is not supported together with an organization membership filter.");
+            }
+
             return await ListByOrganizationAsync(query, membership, cancellationToken);
         }
 
@@ -94,6 +100,11 @@ internal sealed class UserRepository : IUserRepository
         if (query.Role is { } role)
         {
             parts.Add($"role=eq.{SupabaseQuery.Value(ToStorageRole(role))}");
+        }
+
+        if (query.ExcludeRole is { } excludeRole)
+        {
+            parts.Add($"role=neq.{SupabaseQuery.Value(ToStorageRole(excludeRole))}");
         }
 
         if (query.IsActive is { } isActive)

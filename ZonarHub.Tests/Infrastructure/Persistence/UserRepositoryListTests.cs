@@ -134,6 +134,66 @@ public class UserRepositoryListTests
         Assert.Equal(5, totalCount);
     }
 
+    [Fact]
+    public async Task List_WithExcludeRole_AddsNeqFilterAlongsideRoleEqFilter()
+    {
+        var tenantId = Guid.NewGuid();
+        var requests = new List<(string Method, string Path, string? Body)>();
+        var repository = CreateRepository(requests, _ => Json(Array.Empty<object>()));
+
+        await repository.ListAsync(new UserQuery(
+            tenantId, null, UserRole.Editor, null, 1, 10, ExcludeRole: UserRole.SystemAdmin));
+
+        var request = Assert.Single(requests);
+        Assert.Equal("GET", request.Method);
+        Assert.Contains($"tenant_id=eq.{tenantId}", request.Path, StringComparison.Ordinal);
+        Assert.Contains("role=eq.editor", request.Path, StringComparison.Ordinal);
+        Assert.Contains("role=neq.system_admin", request.Path, StringComparison.Ordinal);
+        Assert.Contains("offset=0&limit=10", request.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task List_WithExcludeRoleAndNoTenant_AddsNeqFilterToGlobalQuery()
+    {
+        var requests = new List<(string Method, string Path, string? Body)>();
+        var repository = CreateRepository(requests, _ => Json(Array.Empty<object>()));
+
+        await repository.ListAsync(new UserQuery(
+            null, null, null, null, 1, 10, ExcludeRole: UserRole.SystemAdmin));
+
+        var request = Assert.Single(requests);
+        Assert.DoesNotContain("tenant_id=", request.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain("role=eq.", request.Path, StringComparison.Ordinal);
+        Assert.Contains("role=neq.system_admin", request.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task List_WithoutExcludeRole_DoesNotAddNeqFilter()
+    {
+        var requests = new List<(string Method, string Path, string? Body)>();
+        var repository = CreateRepository(requests, _ => Json(Array.Empty<object>()));
+
+        await repository.ListAsync(new UserQuery(null, null, UserRole.Admin, null, 1, 10));
+
+        var request = Assert.Single(requests);
+        Assert.Contains("role=eq.admin", request.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain("neq.", request.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task List_WithExcludeRoleAndMembership_FailsClosedWithoutCallingProvider()
+    {
+        var requests = new List<(string Method, string Path, string? Body)>();
+        var repository = CreateRepository(requests, _ => Json(new { total_count = 0, items = Array.Empty<object>() }));
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => repository.ListAsync(new UserQuery(
+            null, null, null, null, 1, 10,
+            new UserOrganizationMembership(Guid.NewGuid(), null),
+            UserRole.SystemAdmin)));
+
+        Assert.Empty(requests);
+    }
+
     private static UserRepository CreateRepository(
         List<(string Method, string Path, string? Body)> requests,
         Func<HttpRequestMessage, HttpResponseMessage> respond)

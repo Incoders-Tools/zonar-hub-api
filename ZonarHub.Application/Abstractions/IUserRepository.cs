@@ -25,6 +25,14 @@ public interface IUserRepository
     Task RemoveAsync(UserId id, CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Filters and pages a user list.
+/// </summary>
+/// <param name="Membership">Optional organization membership restriction.</param>
+/// <param name="ExcludeRole">
+/// When set, users with this role are removed before paging and counting.
+/// Not yet supported together with <paramref name="Membership"/>; repositories reject that combination.
+/// </param>
 public sealed record UserQuery(
     Guid? TenantId,
     string? Search,
@@ -32,7 +40,8 @@ public sealed record UserQuery(
     bool? IsActive,
     int Page,
     int PageSize,
-    UserOrganizationMembership? Membership = null);
+    UserOrganizationMembership? Membership = null,
+    UserRole? ExcludeRole = null);
 
 /// <summary>
 /// Restricts a user list to members of one organization, applied before paging and counting.

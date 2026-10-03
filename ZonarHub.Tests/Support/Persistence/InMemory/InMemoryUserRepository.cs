@@ -59,6 +59,12 @@ public sealed class InMemoryUserRepository : IUserRepository
         UserQuery query,
         CancellationToken cancellationToken = default)
     {
+        // Mirrors the Supabase repository, whose membership RPC cannot exclude a role yet.
+        if (query.Membership is not null && query.ExcludeRole is not null)
+        {
+            throw new NotSupportedException("Excluding a role is not supported together with an organization membership filter.");
+        }
+
         IEnumerable<User> source = _store.Data.Values;
 
         if (query.TenantId is { } tenantId)
@@ -77,6 +83,11 @@ public sealed class InMemoryUserRepository : IUserRepository
         if (query.Role is { } role)
         {
             source = source.Where(u => u.Role == role);
+        }
+
+        if (query.ExcludeRole is { } excludeRole)
+        {
+            source = source.Where(u => u.Role != excludeRole);
         }
 
         if (query.IsActive is { } isActive)
