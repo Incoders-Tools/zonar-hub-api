@@ -22,8 +22,16 @@ public static class AdminUsersEndpointsExtensions
         group.MapGet("/", ListAsync)
             .WithName("ListAdminUsers")
             .WithSummary("List users managed by the current admin scope")
-            .WithDescription("Returns a paged list of users filtered by the caller authorization scope and optional search filters.")
+            .WithDescription(
+                "Returns a paged list of users within an explicit scope, filtered before paging and counting. " +
+                "scope=organization (default) requires organizationId of an active organization the caller may manage " +
+                "and returns users whose primary or assigned organization is that organization; tenant administrators " +
+                "also see unassigned users of their tenant so they can assign them, while system administrators see only " +
+                "associated users. scope=all returns every user, is restricted to system administrators, and must not " +
+                "include organizationId. The X-Organization-Id header is never used to authorize the scope.")
             .Produces<PageResult<AdminUserResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
             .RequireAuthorization("AdminOrAbove");
 
         group.MapPost("/", CreateAsync)
@@ -59,17 +67,28 @@ public static class AdminUsersEndpointsExtensions
         return app;
     }
 
-    private static async Task<IResult> ListAsync(
+    internal static async Task<IResult> ListAsync(
         ISender sender,
         CancellationToken cancellationToken,
         [FromQuery] string? search = null,
         [FromQuery] string? roleId = null,
         [FromQuery] bool? isActive = null,
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 20)
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? scope = null,
+        [FromQuery] Guid? organizationId = null)
     {
         var filter = new AdminUserFilter(search, roleId, isActive, page, pageSize);
-        var result = await sender.Send(new GetAdminUsersQuery(filter), cancellationToken);
+        var result = await sender.Send(new GetAdminUsersQuery(filter, scope, organizationId), cancellationToken);
+        if (result.IsFailure && result.Error == AdminUserErrors.Forbidden)
+        {
+            return TypedResults.Problem(
+                title: "Forbidden",
+                detail: result.Error.MessageKey,
+                statusCode: StatusCodes.Status403Forbidden,
+                extensions: new Dictionary<string, object?> { ["code"] = result.Error.Code });
+        }
+
         return result.Match(r => (IResult)TypedResults.Ok(r));
     }
 
