@@ -329,6 +329,92 @@ public class AdminUsersListScopeTests
     }
 
     [Fact]
+    public async Task TenantAdmin_List_HidesForeignTenantPrimaryOrganization()
+    {
+        var h = new AdminUsersTestHarness(Now);
+        var tenant = Guid.NewGuid();
+        var org = await h.SeedOrganizationAsync(tenant, "Org A");
+        var foreignOrg = await h.SeedOrganizationAsync(Guid.NewGuid(), "Foreign Org");
+        var caller = await SeedMemberAsync(h, tenant, "admin@zonarhub.dev", primaryOrganizationId: org.Id.Value, role: UserRole.Admin);
+        var member = await SeedMemberAsync(
+            h,
+            tenant,
+            "member@zonarhub.dev",
+            primaryOrganizationId: foreignOrg.Id.Value,
+            assignedOrganizationIds: [org.Id.Value]);
+        h.CurrentUser.Authenticate(caller.Id.Value, caller.Email);
+
+        var result = await h.List.Handle(
+            new GetAdminUsersQuery(Filter(), AdminUserListScopes.Organization, org.Id.Value),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value.Items, item => item.Id == member.Id.Value);
+        Assert.Null(item.OrganizationId);
+        Assert.Null(item.OrganizationName);
+        Assert.Equal(new[] { org.Id.Value }, item.TenantIds);
+        Assert.Equal(new[] { "Org A" }, item.TenantNames);
+    }
+
+    [Fact]
+    public async Task TenantAdmin_List_HidesForeignTenantAssignments_KeepsInTenantOrganizations()
+    {
+        var h = new AdminUsersTestHarness(Now);
+        var tenant = Guid.NewGuid();
+        var org = await h.SeedOrganizationAsync(tenant, "Org A");
+        var siblingOrg = await h.SeedOrganizationAsync(tenant, "Org B");
+        var foreignOrg = await h.SeedOrganizationAsync(Guid.NewGuid(), "Foreign Org");
+        var caller = await SeedMemberAsync(h, tenant, "admin@zonarhub.dev", primaryOrganizationId: org.Id.Value, role: UserRole.Admin);
+        var member = await SeedMemberAsync(
+            h,
+            tenant,
+            "member@zonarhub.dev",
+            primaryOrganizationId: org.Id.Value,
+            assignedOrganizationIds: [org.Id.Value, foreignOrg.Id.Value, Guid.NewGuid(), siblingOrg.Id.Value]);
+        h.CurrentUser.Authenticate(caller.Id.Value, caller.Email);
+
+        var result = await h.List.Handle(
+            new GetAdminUsersQuery(Filter(), AdminUserListScopes.Organization, org.Id.Value),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value.Items, item => item.Id == member.Id.Value);
+        Assert.Equal(org.Id.Value, item.OrganizationId);
+        Assert.Equal("Org A", item.OrganizationName);
+        Assert.Equal(new[] { org.Id.Value, siblingOrg.Id.Value }, item.TenantIds);
+        Assert.Equal(new[] { "Org A", "Org B" }, item.TenantNames);
+    }
+
+    [Fact]
+    public async Task SystemAdmin_List_KeepsForeignTenantOrganizationMetadata()
+    {
+        var h = new AdminUsersTestHarness(Now);
+        var tenant = Guid.NewGuid();
+        var org = await h.SeedOrganizationAsync(tenant, "Org A");
+        var foreignOrg = await h.SeedOrganizationAsync(Guid.NewGuid(), "Foreign Org");
+        var caller = await h.SeedUserAsync(UserRole.SystemAdmin, tenantId: null, "root@zonarhub.dev", "Root");
+        var member = await SeedMemberAsync(
+            h,
+            tenant,
+            "member@zonarhub.dev",
+            primaryOrganizationId: foreignOrg.Id.Value,
+            assignedOrganizationIds: [org.Id.Value, foreignOrg.Id.Value]);
+        h.CurrentUser.Authenticate(caller.Id.Value, caller.Email);
+
+        var result = await h.List.Handle(
+            new GetAdminUsersQuery(Filter(), AdminUserListScopes.Organization, org.Id.Value),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value.Items);
+        Assert.Equal(member.Id.Value, item.Id);
+        Assert.Equal(foreignOrg.Id.Value, item.OrganizationId);
+        Assert.Equal("Foreign Org", item.OrganizationName);
+        Assert.Equal(new[] { org.Id.Value, foreignOrg.Id.Value }, item.TenantIds);
+        Assert.Equal(new[] { "Org A", "Foreign Org" }, item.TenantNames);
+    }
+
+    [Fact]
     public async Task SupabaseUserRepository_WithoutMembership_KeepsTenantQuery()
     {
         var tenant = Guid.NewGuid();

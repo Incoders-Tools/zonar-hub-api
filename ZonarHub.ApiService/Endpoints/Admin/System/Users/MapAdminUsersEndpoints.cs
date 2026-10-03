@@ -28,7 +28,9 @@ public static class AdminUsersEndpointsExtensions
                 "and returns users whose primary or assigned organization is that organization; tenant administrators " +
                 "also see unassigned users of their tenant so they can assign them, while system administrators see only " +
                 "associated users. scope=all returns every user, is restricted to system administrators, and must not " +
-                "include organizationId. The X-Organization-Id header is never used to authorize the scope.")
+                "include organizationId. The X-Organization-Id header is never used to authorize the scope. " +
+                "Non-system administrators only see organization assignments (tenantIds/tenantNames and the primary " +
+                "organizationId/organizationName) that belong to their own tenant.")
             .Produces<PageResult<AdminUserResponse>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)

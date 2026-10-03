@@ -59,8 +59,9 @@ public sealed class GetAdminUsersHandler
             return Result.Failure<PageResult<AdminUserResponse>>(scope.Error);
         }
 
+        var isSystemAdmin = AdminUserAuthorization.IsSystemAdmin(caller);
         var query = new UserQuery(
-            AdminUserAuthorization.IsSystemAdmin(caller) ? null : caller.TenantId,
+            isSystemAdmin ? null : caller.TenantId,
             filter.Search,
             role,
             filter.IsActive,
@@ -90,13 +91,20 @@ public sealed class GetAdminUsersHandler
             }
         }
 
+        // Non-system administrators only see organization metadata of their own tenant.
         var organizationNames = new Dictionary<Guid, string>();
+        var visibleOrganizationIds = new HashSet<Guid>();
         foreach (var organizationId in organizationIds)
         {
             var organization = await _organizations.GetByIdAsync(new ZonarHub.Domain.Organizations.OrganizationId(organizationId), cancellationToken);
             if (organization is not null)
             {
                 organizationNames[organizationId] = organization.DisplayName;
+            }
+
+            if (isSystemAdmin || (organization is not null && organization.TenantId == caller.TenantId))
+            {
+                visibleOrganizationIds.Add(organizationId);
             }
         }
 
@@ -110,7 +118,12 @@ public sealed class GetAdminUsersHandler
                         : Array.Empty<Guid>();
                 }
 
-                return AdminUserResponse.FromDomain(user, ids, organizationNames);
+                var visibleIds = ids.Where(visibleOrganizationIds.Contains).ToList();
+                var response = AdminUserResponse.FromDomain(user, visibleIds, organizationNames);
+
+                return user.OrganizationId is { } primaryId && !visibleOrganizationIds.Contains(primaryId)
+                    ? response with { OrganizationId = null, OrganizationName = null }
+                    : response;
             })
             .ToList();
 
