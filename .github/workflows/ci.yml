@@ -2,34 +2,51 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   pull_request:
-    branches: [main]
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # PR runs share one group per PR so a new commit cancels the stale run.
+  # Each push gets its own ref+SHA group: a shared group would let a newer
+  # pending run replace a queued one even without cancel-in-progress, so
+  # every dev/main commit (including the same SHA on both refs) is tested.
+  group: >-
+    ci-${{ github.workflow }}-${{ github.event_name == 'pull_request'
+    && format('pr-{0}', github.event.pull_request.number)
+    || format('push-{0}-{1}', github.ref, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
+      # All solution projects target net10.0; the repository has no global.json.
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          global-json-file: global.json
+          dotnet-version: 10.0.x
 
       - name: Restore
-        run: dotnet restore ZonarHub.sln
+        run: dotnet restore ZonarHub.slnx
 
       - name: Build
-        run: dotnet build ZonarHub.sln --configuration Release --no-restore
+        run: dotnet build ZonarHub.slnx --configuration Release --no-restore
 
       - name: Test with coverage
         run: >
-          dotnet test ZonarHub.sln
+          dotnet test ZonarHub.slnx
           --configuration Release
           --no-build
           --collect:"XPlat Code Coverage"
-          --settings coverlet.runsettings
           --results-directory TestResults
           --logger "trx;LogFileName=test-results.trx"
 
@@ -38,9 +55,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-results
-          path: |
-            TestResults/**/*.cobertura.xml
-            TestResults/**/*.opencover.xml
+          path: TestResults/**/*.cobertura.xml
 
       - name: Upload test result artifacts
         if: always()
@@ -48,3 +63,17 @@ jobs:
         with:
           name: test-results
           path: TestResults/**/*.trx
+
+  database-migrations:
+    # Applies every migration and runs the SQL regression suite against a
+    # disposable postgres:17 container started by the harness itself. It never
+    # connects to a hosted Supabase project and needs no secrets.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Migrations and SQL regression tests (disposable PostgreSQL 17)
+        run: bash supabase/tests/run_complex_courts_atomic.sh
