@@ -379,9 +379,11 @@ docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
 GRANT USAGE ON SCHEMA public TO service_role;
 GRANT SELECT ON public.organizations, public.sports TO service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.complexes, public.courts TO service_role;
+GRANT SELECT ON public.users, public.user_organization_assignments TO service_role;
 SQL
 
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < supabase/tests/complex_courts_atomic.sql
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < supabase/tests/list_admin_users_by_organization.sql
 
 if [[ "${UNSAFE_COMPLEX_CONFLICT_TEST:-}" == 1 ]]; then
   # Mutation test: replace only the function in the disposable database, after
