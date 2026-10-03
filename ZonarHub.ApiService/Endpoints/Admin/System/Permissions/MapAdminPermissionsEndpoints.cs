@@ -1,9 +1,11 @@
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using ZonarHub.ApiService.Endpoints.Common;
+using ZonarHub.Application.Common.Pagination;
 using ZonarHub.Application.Features.AdminPermissions;
 using ZonarHub.Application.Features.AdminPermissions.GetCatalog;
 using ZonarHub.Application.Features.AdminPermissions.GetUserPermissions;
+using ZonarHub.Application.Features.AdminPermissions.ListPermissionSources;
 using ZonarHub.Application.Features.AdminUsers;
 using ZonarHub.Application.Features.AdminUsers.Update;
 
@@ -26,6 +28,24 @@ public static class AdminPermissionsEndpointsExtensions
             .Produces<PermissionCatalogResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
+
+        app.MapGet("/api/admin/users/permission-sources", ListPermissionSourcesAsync)
+            .WithTags(Tag)
+            .WithName("ListPermissionSourceUsers")
+            .WithSummary("Search users whose permissions can be copied")
+            .WithDescription(
+                "Returns a paged, minimal list of users (id, fullName, email, roleId, isActive) matching search, " +
+                "independent of the Users page organization or paging. System administrators search every tenant; " +
+                "tenant administrators search only their own tenant and never see system administrators, filtered " +
+                "before paging and counting. Inactive users are included. search is required: PostgREST " +
+                "wildcards and expression delimiters are removed; at least 2 non-underscore, non-whitespace " +
+                "characters must remain, otherwise 400 is returned. " +
+                "page is normalized to at least 1 and pageSize is capped at 20. Organization metadata is not returned.")
+            .Produces<PageResult<PermissionSourceUserResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .RequireAuthorization("AdminOrAbove");
 
         app.MapGet("/api/admin/users/{id:guid}/permissions", GetUserPermissionsAsync)
             .WithTags(Tag)
@@ -59,6 +79,26 @@ public static class AdminPermissionsEndpointsExtensions
     {
         var result = await sender.Send(new GetPermissionCatalogQuery(), cancellationToken);
         return result.Match(catalog => (IResult)TypedResults.Ok(catalog));
+    }
+
+    internal static async Task<IResult> ListPermissionSourcesAsync(
+        ISender sender,
+        CancellationToken cancellationToken,
+        [FromQuery] string? search = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = ListPermissionSourcesLimits.MaxPageSize)
+    {
+        var result = await sender.Send(new ListPermissionSourcesQuery(search, page, pageSize), cancellationToken);
+        if (result.IsFailure && result.Error == AdminPermissionErrors.Forbidden)
+        {
+            return TypedResults.Problem(
+                title: "Forbidden",
+                detail: result.Error.MessageKey,
+                statusCode: StatusCodes.Status403Forbidden,
+                extensions: new Dictionary<string, object?> { ["code"] = result.Error.Code });
+        }
+
+        return result.Match(response => (IResult)TypedResults.Ok(response));
     }
 
     private static async Task<IResult> GetUserPermissionsAsync(
