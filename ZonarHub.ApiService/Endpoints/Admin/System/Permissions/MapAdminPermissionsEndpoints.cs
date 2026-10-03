@@ -8,6 +8,7 @@ using ZonarHub.Application.Features.AdminPermissions.GetUserPermissions;
 using ZonarHub.Application.Features.AdminPermissions.ListPermissionSources;
 using ZonarHub.Application.Features.AdminUsers;
 using ZonarHub.Application.Features.AdminUsers.Update;
+using ZonarHub.Domain.Common;
 
 namespace ZonarHub.ApiService.Endpoints.Admin.System.Permissions;
 
@@ -51,7 +52,11 @@ public static class AdminPermissionsEndpointsExtensions
             .WithTags(Tag)
             .WithName("GetAdminUserPermissions")
             .WithSummary("Get user permissions grouped by organization")
-            .WithDescription("Returns the organization-scoped permission matrix for one managed user.")
+            .WithDescription(
+                "Returns the organization-scoped permission matrix for one managed user. System administrators see " +
+                "every assigned and primary organization. Tenant administrators see only organizations that belong " +
+                "to their own tenant; foreign-tenant or unresolvable organizations are omitted. " +
+                "Returns 403 when the caller cannot manage the target user and 404 when the user does not exist.")
             .Produces<AdminUserPermissionsResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -91,24 +96,31 @@ public static class AdminPermissionsEndpointsExtensions
         var result = await sender.Send(new ListPermissionSourcesQuery(search, page, pageSize), cancellationToken);
         if (result.IsFailure && result.Error == AdminPermissionErrors.Forbidden)
         {
-            return TypedResults.Problem(
-                title: "Forbidden",
-                detail: result.Error.MessageKey,
-                statusCode: StatusCodes.Status403Forbidden,
-                extensions: new Dictionary<string, object?> { ["code"] = result.Error.Code });
+            return ForbiddenProblem(result.Error);
         }
 
         return result.Match(response => (IResult)TypedResults.Ok(response));
     }
 
-    private static async Task<IResult> GetUserPermissionsAsync(
+    internal static async Task<IResult> GetUserPermissionsAsync(
         Guid id,
         ISender sender,
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(new GetAdminUserPermissionsQuery(id), cancellationToken);
+        if (result.IsFailure && result.Error == AdminPermissionErrors.Forbidden)
+        {
+            return ForbiddenProblem(result.Error);
+        }
+
         return result.Match(response => (IResult)TypedResults.Ok(response));
     }
+
+    private static IResult ForbiddenProblem(Error error) => TypedResults.Problem(
+        title: "Forbidden",
+        detail: error.MessageKey,
+        statusCode: StatusCodes.Status403Forbidden,
+        extensions: new Dictionary<string, object?> { ["code"] = error.Code });
 
     private static async Task<IResult> UpdateUserPermissionsAsync(
         Guid id,
