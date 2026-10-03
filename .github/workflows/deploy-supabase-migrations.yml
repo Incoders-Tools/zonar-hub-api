@@ -1,0 +1,214 @@
+name: Deploy Supabase migrations
+
+# Production database changes are never automatic. Each database operation
+# requires an operator to dispatch this workflow by hand from main, after the
+# change has been merged, and a reviewer to approve the protected
+# `supabase-production` environment. See supabase/README-migration-delivery.md.
+on:
+  workflow_dispatch:
+    inputs:
+      main_sha:
+        description: Full 40-character SHA of the current refs/heads/main head (stale SHAs are rejected)
+        required: true
+        type: string
+      project_ref:
+        description: Supabase project ref; must equal the environment variable SUPABASE_PROJECT_REF
+        required: true
+        type: string
+      expected_pending_versions:
+        description: Exact comma-separated migration versions expected to be pending, in apply order
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Opt out of Supabase CLI telemetry so no usage data leaves the runner.
+env:
+  SUPABASE_TELEMETRY_DISABLED: "1"
+  DO_NOT_TRACK: "1"
+
+concurrency:
+  # One static group serializes every run. A running deployment is never
+  # cancelled; a newer dispatch may displace a queued one, which then has to be
+  # dispatched again (the SHA preflight rejects it if main has moved).
+  group: supabase-production-migrations
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight (no secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Preflight unit tests
+        run: python3 -m unittest discover -s supabase/tests -p "test_*.py"
+
+      - name: Validate dispatch inputs
+        env:
+          INPUT_MAIN_SHA: ${{ inputs.main_sha }}
+          INPUT_PROJECT_REF: ${{ inputs.project_ref }}
+          EXPECTED_PENDING_VERSIONS: ${{ inputs.expected_pending_versions }}
+        run: python3 supabase/scripts/verify_migration_plan.py check-inputs
+
+      - name: Bind run to current main head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_MAIN_SHA: ${{ inputs.main_sha }}
+        run: |
+          set -euo pipefail
+          CHECKOUT_SHA="$(git rev-parse HEAD)" \
+          REMOTE_MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" \
+            python3 supabase/scripts/verify_migration_plan.py check-context
+
+  deploy:
+    name: Apply approved migrations
+    needs: preflight
+    runs-on: ubuntu-latest
+    # Step timeouts below keep "Apply migrations" plus "Verify remote migration
+    # history" well inside this limit, so a hung push fails the step (and the
+    # history is still re-read) instead of cancelling the whole job.
+    timeout-minutes: 40
+    # Required reviewers and the main-only deployment branch policy are
+    # configured on this environment; the workflow cannot enforce them itself.
+    environment: supabase-production
+    env:
+      INPUT_MAIN_SHA: ${{ inputs.main_sha }}
+      INPUT_PROJECT_REF: ${{ inputs.project_ref }}
+      EXPECTED_PENDING_VERSIONS: ${{ inputs.expected_pending_versions }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_APPROVED_BASELINE: ${{ vars.SUPABASE_APPROVED_BASELINE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Re-bind run to current main head after approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CHECKOUT_SHA="$(git rev-parse HEAD)" \
+          REMOTE_MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" \
+            python3 supabase/scripts/verify_migration_plan.py check-context
+
+      - name: Validate environment configuration
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SUPABASE_PROJECT_REF" || -z "$SUPABASE_APPROVED_BASELINE" ]]; then
+            echo "::error::Environment variables SUPABASE_PROJECT_REF and SUPABASE_APPROVED_BASELINE are required."
+            exit 1
+          fi
+          # A linked project would let the CLI target something other than --db-url.
+          if [[ -e supabase/.temp ]]; then
+            echo "::error::supabase/.temp must not exist; linked projects are not allowed."
+            exit 1
+          fi
+          python3 supabase/scripts/verify_migration_plan.py check-db-url
+
+      # Release assets are mutable, so the archive is checked against a digest
+      # pinned here before it is extracted. Changing the version requires
+      # updating the digest from that release's official checksums.txt.
+      - name: Install verified Supabase CLI
+        timeout-minutes: 5
+        env:
+          SUPABASE_CLI_VERSION: 2.109.0
+          SUPABASE_CLI_SHA256: d96c1ca0ef1f89582f6f001c306547d709644d35fa298c08600323d4eb9fdcf2
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/supabase-cli.tar.gz"
+          target="$RUNNER_TEMP/supabase-cli"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_${SUPABASE_CLI_VERSION}_linux_amd64.tar.gz"
+          echo "${SUPABASE_CLI_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir -p "$target"
+          tar -xzf "$archive" -C "$target"
+          if [[ ! -x "$target/supabase" ]]; then
+            echo "::error::Verified archive does not contain the supabase binary."
+            exit 1
+          fi
+          echo "$target" >> "$GITHUB_PATH"
+
+      - name: Verify Supabase CLI version
+        run: |
+          set -euo pipefail
+          actual="$(supabase --version)"
+          if [[ "$actual" != "2.109.0" ]]; then
+            echo "::error::Expected Supabase CLI 2.109.0."
+            exit 1
+          fi
+
+      # CLI output is written to runner temp files and never printed: on
+      # connection errors it may contain connection details.
+      - name: Read remote migration history
+        timeout-minutes: 5
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          if ! supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json \
+              > "$RUNNER_TEMP/history-before.json" 2> "$RUNNER_TEMP/history-before.log"; then
+            echo "::error::Supabase CLI could not read the remote migration history; output withheld."
+            exit 1
+          fi
+
+      - name: Dry run and validate plan
+        timeout-minutes: 5
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          if ! supabase db push --dry-run --db-url "$SUPABASE_DB_URL" \
+              > "$RUNNER_TEMP/dry-run.log" 2>&1; then
+            echo "::error::Supabase CLI dry run failed; output withheld."
+            exit 1
+          fi
+          python3 supabase/scripts/verify_migration_plan.py check-plan \
+            --migrations-dir supabase/migrations \
+            --list-json "$RUNNER_TEMP/history-before.json" \
+            --dry-run-log "$RUNNER_TEMP/dry-run.log"
+
+      - name: Re-bind run to current main head before applying
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CHECKOUT_SHA="$(git rev-parse HEAD)" \
+          REMOTE_MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" \
+            python3 supabase/scripts/verify_migration_plan.py check-context
+
+      - name: Apply migrations
+        id: push
+        timeout-minutes: 20
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          if ! supabase db push --yes --db-url "$SUPABASE_DB_URL" \
+              > "$RUNNER_TEMP/push.log" 2>&1; then
+            echo "::error::Supabase CLI push failed; output withheld. Follow the rollback procedure in supabase/README-migration-delivery.md."
+            exit 1
+          fi
+
+      - name: Verify remote migration history
+        if: ${{ !cancelled() && steps.push.outcome != 'skipped' }}
+        timeout-minutes: 5
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          if ! supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json \
+              > "$RUNNER_TEMP/history-after.json" 2> "$RUNNER_TEMP/history-after.log"; then
+            echo "::error::Supabase CLI could not re-read the remote migration history; output withheld."
+            exit 1
+          fi
+          python3 supabase/scripts/verify_migration_plan.py verify-applied \
+            --migrations-dir supabase/migrations \
+            --list-json "$RUNNER_TEMP/history-after.json"
