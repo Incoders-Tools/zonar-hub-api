@@ -36,6 +36,14 @@ public static class AdminUserErrors
         "admin_users.organization_scope_invalid",
         "admin.users.errors.organization_scope_invalid");
 
+    public static readonly Error ListScopeInvalid = Error.Validation(
+        "admin_users.list_scope_invalid",
+        "admin.users.errors.list_scope_invalid");
+
+    public static readonly Error ListOrganizationRequired = Error.Validation(
+        "admin_users.list_organization_required",
+        "admin.users.errors.list_organization_required");
+
     public static readonly Error UserToolPermissionForbidden = Error.Failure(
         "admin_users.user_tool_permission_forbidden",
         "admin.users.errors.user_tool_permission_forbidden");

@@ -6,10 +6,17 @@ namespace ZonarHub.Infrastructure.Persistence.InMemory;
 public sealed class InMemoryUserRepository : IUserRepository
 {
     private readonly InMemoryUserStore _store;
+    private readonly InMemoryUserOrganizationAssignmentStore _assignments;
 
     public InMemoryUserRepository(InMemoryUserStore store)
+        : this(store, new InMemoryUserOrganizationAssignmentStore())
+    {
+    }
+
+    public InMemoryUserRepository(InMemoryUserStore store, InMemoryUserOrganizationAssignmentStore assignments)
     {
         _store = store;
+        _assignments = assignments;
     }
 
     public Task<User?> GetByIdAsync(UserId id, CancellationToken cancellationToken = default)
@@ -77,6 +84,11 @@ public sealed class InMemoryUserRepository : IUserRepository
             source = source.Where(u => u.IsActive == isActive);
         }
 
+        if (query.Membership is { } membership)
+        {
+            source = source.Where(u => IsMember(u, membership));
+        }
+
         var filtered = source
             .OrderBy(u => u.Email, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -88,6 +100,23 @@ public sealed class InMemoryUserRepository : IUserRepository
             .ToList();
 
         return Task.FromResult((page, total));
+    }
+
+    private bool IsMember(User user, UserOrganizationMembership membership)
+    {
+        var assigned = _assignments.Data.TryGetValue(user.Id.Value, out var ids)
+            ? ids
+            : new List<Guid>();
+
+        if (user.OrganizationId == membership.OrganizationId || assigned.Contains(membership.OrganizationId))
+        {
+            return true;
+        }
+
+        return membership.IncludeUnassignedOfTenantId is { } tenantId &&
+               user.TenantId == tenantId &&
+               user.OrganizationId is null &&
+               assigned.Count == 0;
     }
 
     public Task AddAsync(User user, CancellationToken cancellationToken = default)

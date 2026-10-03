@@ -53,13 +53,20 @@ public sealed class GetAdminUsersHandler
             role = mappedRole;
         }
 
+        var scope = await ResolveScopeAsync(caller, request, cancellationToken);
+        if (scope.IsFailure)
+        {
+            return Result.Failure<PageResult<AdminUserResponse>>(scope.Error);
+        }
+
         var query = new UserQuery(
             AdminUserAuthorization.IsSystemAdmin(caller) ? null : caller.TenantId,
             filter.Search,
             role,
             filter.IsActive,
             filter.Page,
-            filter.PageSize);
+            filter.PageSize,
+            scope.Value);
 
         var (items, totalCount) = await _users.ListAsync(query, cancellationToken);
 
@@ -108,6 +115,57 @@ public sealed class GetAdminUsersHandler
             .ToList();
 
         return Result.Success(new PageResult<AdminUserResponse>(mapped, filter.Page, filter.PageSize, totalCount));
+    }
+
+    /// <summary>
+    /// Resolves the requested list scope into a membership filter (<c>null</c> means all users).
+    /// Organization scope is the default and fails closed without a valid, active, in-tenant organization;
+    /// all scope is reserved for system administrators. Tenant administrators additionally see
+    /// unassigned users of their tenant so they can assign them.
+    /// </summary>
+    private async Task<Result<UserOrganizationMembership?>> ResolveScopeAsync(
+        User caller,
+        GetAdminUsersQuery request,
+        CancellationToken cancellationToken)
+    {
+        var scope = request.Scope?.Trim() ?? AdminUserListScopes.Organization;
+        var isSystemAdmin = AdminUserAuthorization.IsSystemAdmin(caller);
+
+        if (string.Equals(scope, AdminUserListScopes.All, StringComparison.OrdinalIgnoreCase))
+        {
+            if (request.OrganizationId is not null)
+            {
+                return Result.Failure<UserOrganizationMembership?>(AdminUserErrors.ListScopeInvalid);
+            }
+
+            return isSystemAdmin
+                ? Result.Success<UserOrganizationMembership?>(null)
+                : Result.Failure<UserOrganizationMembership?>(AdminUserErrors.Forbidden);
+        }
+
+        if (!string.Equals(scope, AdminUserListScopes.Organization, StringComparison.OrdinalIgnoreCase))
+        {
+            return Result.Failure<UserOrganizationMembership?>(AdminUserErrors.ListScopeInvalid);
+        }
+
+        if (request.OrganizationId is not { } organizationId)
+        {
+            return Result.Failure<UserOrganizationMembership?>(AdminUserErrors.ListOrganizationRequired);
+        }
+
+        var organization = await _organizations.GetByIdAsync(
+            new ZonarHub.Domain.Organizations.OrganizationId(organizationId),
+            cancellationToken);
+        var belongsToCaller = isSystemAdmin ||
+            (caller.TenantId is { } callerTenantId && organization?.TenantId == callerTenantId);
+
+        if (organization is null || !organization.IsActive || !belongsToCaller)
+        {
+            return Result.Failure<UserOrganizationMembership?>(AdminUserErrors.OrganizationScopeInvalid);
+        }
+
+        return Result.Success<UserOrganizationMembership?>(
+            new UserOrganizationMembership(organizationId, isSystemAdmin ? null : caller.TenantId));
     }
 
     private static AdminUserFilter Normalize(AdminUserFilter filter)

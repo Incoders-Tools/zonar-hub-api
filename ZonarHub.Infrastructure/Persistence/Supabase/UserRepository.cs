@@ -65,6 +65,13 @@ internal sealed class UserRepository : IUserRepository
         UserQuery query,
         CancellationToken cancellationToken = default)
     {
+        if (query.Membership is not null)
+        {
+            // Fail closed: PostgREST cannot filter primary-or-assigned membership before paging yet,
+            // and dropping the filter would leak a tenant/global list. Replaced by a membership-aware query.
+            throw new NotSupportedException("Organization-scoped user listing is not supported by the Supabase user repository yet.");
+        }
+
         var parts = new List<string>
         {
             "select=*",
