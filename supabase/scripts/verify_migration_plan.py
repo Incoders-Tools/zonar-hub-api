@@ -45,6 +45,9 @@ DIRECT_PORT = 5432
 # database; pooler-style users such as `postgres.<ref>` are rejected.
 DIRECT_USER = "postgres"
 DIRECT_DATABASE_PATH = "/postgres"
+# The only workflow whose push run on main may authorize a production apply.
+CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class PlanError(Exception):
@@ -290,6 +293,90 @@ def validate_context(ref: str, input_sha: str, workflow_sha: str, checkout_sha: 
         raise PlanError("checked out commit does not match main_sha.")
     if remote_main_sha != input_sha:
         raise PlanError("main_sha is stale: refs/heads/main has moved.")
+
+
+def _field(document: object, *path: str) -> object:
+    """Walks nested mappings; any missing or non-mapping step yields None."""
+    for key in path:
+        if not isinstance(document, dict):
+            return None
+        document = document.get(key)
+    return document
+
+
+def _text(document: object, *path: str) -> str:
+    """Returns a nested string field, rejecting any other shape without echoing it."""
+    value = _field(document, *path)
+    if not isinstance(value, str):
+        raise PlanError(f"Field {'.'.join(path)} is missing or malformed.")
+    return value
+
+
+def validate_ci_promotion(
+    run: object,
+    pulls: object,
+    expected_repo: str,
+    checkout_sha: str,
+    remote_main_sha: str,
+) -> str:
+    """Returns the main SHA when a green CI push run proves a merged dev to main promotion.
+
+    `run` is the GitHub `workflow_run` object and `pulls` the pull requests GitHub
+    associates with its head commit; fetching them is the caller's job. Exactly one
+    merged PR must have that commit as its merge commit, and it must come from the
+    same-repository `dev` branch. Direct pushes with no merged PR association, PR-only
+    runs, forks, failed or unfinished runs and stale SHAs all fail. GitHub can still
+    mark an open dev PR as merged when its head is fast-forward pushed to main, so
+    branch protection on main is required to exclude that bypass. Messages never echo
+    payload values.
+    """
+    if not isinstance(expected_repo, str) or not REPOSITORY_PATTERN.match(expected_repo):
+        raise PlanError("Expected repository must be an owner/name pair.")
+    if not isinstance(run, dict):
+        raise PlanError("CI workflow run payload is malformed.")
+    if (_text(run, "repository", "full_name") != expected_repo
+            or _field(run, "head_repository", "full_name") != expected_repo):
+        raise PlanError("CI workflow run does not belong to the expected repository.")
+    if _text(run, "path") != CI_WORKFLOW_PATH:
+        raise PlanError("Workflow run is not the CI workflow.")
+    if _text(run, "event") != "push":
+        raise PlanError("CI workflow run was not caused by a push.")
+    if _text(run, "head_branch") != "main":
+        raise PlanError("CI workflow run did not test main.")
+    if _text(run, "status") != "completed":
+        raise PlanError("CI workflow run is not completed.")
+    if _field(run, "conclusion") != "success":
+        raise PlanError("CI workflow run is not successful.")
+    sha = _text(run, "head_sha")
+    if not SHA_PATTERN.match(sha):
+        raise PlanError("CI workflow run head SHA is malformed.")
+    if checkout_sha != sha:
+        raise PlanError("checked out commit does not match the CI head SHA.")
+    if remote_main_sha != sha:
+        raise PlanError("CI head SHA is stale: refs/heads/main has moved.")
+
+    if not isinstance(pulls, list):
+        raise PlanError("Associated pull request list is malformed.")
+    merged = []
+    for pr in pulls:
+        merged_at = _field(pr, "merged_at")
+        if not isinstance(pr, dict) or not (merged_at is None
+                                            or isinstance(merged_at, str) and merged_at.strip()):
+            raise PlanError("Associated pull request entry is malformed.")
+        for path in (("base", "ref"), ("head", "ref")):
+            _text(pr, *path)
+        if merged_at is not None and _text(pr, "merge_commit_sha") == sha:
+            merged.append(pr)
+    if not merged:
+        raise PlanError("main commit has no merged pull request; direct pushes are not deployable.")
+    if len(merged) > 1:
+        raise PlanError("main commit is the merge commit of more than one pull request.")
+    (pr,) = merged
+    if (_text(pr, "base", "ref") != "main" or _text(pr, "head", "ref") != "dev"
+            or _field(pr, "base", "repo", "full_name") != expected_repo
+            or _field(pr, "head", "repo", "full_name") != expected_repo):
+        raise PlanError("Merged pull request is not a same-repository dev to main promotion.")
+    return sha
 
 
 def _read(path: str) -> str:

@@ -405,6 +405,175 @@ class ContextTests(unittest.TestCase):
                 vmp.validate_context(*args)
 
 
+CI_REPO = "incoders/zonar-hub-api"
+FORK = "attacker/zonar-hub-api"
+
+
+def ci_run(**overrides):
+    """A GitHub `workflow_run` object for a successful CI push run on main."""
+    run = {
+        "id": 101,
+        "name": "CI",
+        "path": ".github/workflows/ci.yml",
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_branch": "main",
+        "head_sha": SHA,
+        "repository": {"full_name": CI_REPO},
+        "head_repository": {"full_name": CI_REPO},
+        "pull_requests": [],
+    }
+    run.update(overrides)
+    return run
+
+
+def merged_pr(number=7, **overrides):
+    """A pull request object as listed for a commit, merged from dev into main."""
+    pr = {
+        "number": number,
+        "state": "closed",
+        "merged_at": "2026-10-03T22:00:00Z",
+        "merge_commit_sha": SHA,
+        "base": {"ref": "main", "repo": {"full_name": CI_REPO}},
+        "head": {"ref": "dev", "repo": {"full_name": CI_REPO}},
+    }
+    pr.update(overrides)
+    return pr
+
+
+class CiPromotionTests(unittest.TestCase):
+    """Pure validation of the CI run and promotion PR that authorize a main commit."""
+
+    def validate(self, run=None, pulls=None, repo=CI_REPO, checkout=SHA, remote=SHA):
+        return vmp.validate_ci_promotion(ci_run() if run is None else run,
+                                         [merged_pr()] if pulls is None else pulls,
+                                         repo, checkout, remote)
+
+    def test_accepts_successful_main_push_ci_for_merged_dev_promotion(self):
+        self.assertEqual(self.validate(), SHA)
+
+    def test_ignores_open_or_unmerged_prs_that_only_contain_the_commit(self):
+        others = [
+            merged_pr(8, state="open", merged_at=None, merge_commit_sha=OTHER_SHA,
+                      head={"ref": "feature/x", "repo": {"full_name": FORK}}),
+            merged_pr(9, state="closed", merged_at=None, merge_commit_sha=SHA),
+        ]
+        self.assertEqual(self.validate(pulls=others + [merged_pr()]), SHA)
+
+    def test_rejects_runs_that_are_not_a_completed_successful_main_push(self):
+        cases = (
+            ({"conclusion": "failure"}, "successful"),
+            ({"conclusion": "cancelled"}, "successful"),
+            ({"conclusion": None}, "successful"),
+            ({"status": "in_progress", "conclusion": None}, "completed"),
+            ({"status": "queued"}, "completed"),
+            ({"event": "pull_request"}, "push"),
+            ({"event": "pull_request_target"}, "push"),
+            ({"event": "workflow_dispatch"}, "push"),
+            ({"head_branch": "dev"}, "main"),
+            ({"head_branch": "refs/heads/main"}, "main"),
+            ({"path": ".github/workflows/pr-validation.yml"}, "CI workflow"),
+            ({"path": ".github/workflows/ci.yml@refs/heads/dev"}, "CI workflow"),
+            ({"repository": {"full_name": FORK}}, "repository"),
+            ({"head_repository": {"full_name": FORK}}, "repository"),
+            ({"head_repository": None}, "repository"),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(vmp.PlanError, message):
+                self.validate(run=ci_run(**overrides))
+
+    def test_rejects_malformed_run_payloads(self):
+        missing_sha = ci_run()
+        del missing_sha["head_sha"]
+        cases = (None, [], "run", missing_sha, ci_run(head_sha=SHA.upper()), ci_run(head_sha=SHA[:7]),
+                 ci_run(head_sha=1), ci_run(repository="incoders/zonar-hub-api"),
+                 ci_run(repository={"full_name": None}), ci_run(status=["completed"]))
+        for run in cases:
+            with self.subTest(run=run), self.assertRaises(vmp.PlanError):
+                vmp.validate_ci_promotion(run, [merged_pr()], CI_REPO, SHA, SHA)
+
+    def test_rejects_stale_or_mismatched_commit_shas(self):
+        cases = (
+            ({"run": ci_run(head_sha=OTHER_SHA)}, "checked out"),
+            ({"checkout": OTHER_SHA}, "checked out"),
+            ({"checkout": ""}, "checked out"),
+            ({"remote": OTHER_SHA}, "stale"),
+            ({"remote": ""}, "stale"),
+        )
+        for kwargs, message in cases:
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(vmp.PlanError, message):
+                self.validate(**kwargs)
+
+    def test_rejects_direct_push_without_merged_promotion_pr(self):
+        unmerged = merged_pr(merged_at=None)
+        for pulls in ([], [unmerged], [merged_pr(merge_commit_sha=OTHER_SHA)]):
+            with self.subTest(pulls=pulls), self.assertRaisesRegex(vmp.PlanError, "no merged pull request"):
+                self.validate(pulls=pulls)
+
+    def test_rejects_promotion_pr_from_wrong_branch_or_repository(self):
+        cases = (
+            {"head": {"ref": "feature/x", "repo": {"full_name": CI_REPO}}},
+            {"head": {"ref": "Dev", "repo": {"full_name": CI_REPO}}},
+            {"head": {"ref": "dev", "repo": {"full_name": FORK}}},
+            {"head": {"ref": "dev", "repo": None}},
+            {"base": {"ref": "dev", "repo": {"full_name": CI_REPO}}},
+            {"base": {"ref": "main", "repo": {"full_name": FORK}}},
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(vmp.PlanError, "dev"):
+                self.validate(pulls=[merged_pr(**overrides)])
+
+    def test_rejects_ambiguous_promotion_prs(self):
+        cases = (
+            [merged_pr(7), merged_pr(8)],
+            [merged_pr(7), merged_pr(8, head={"ref": "feature/x", "repo": {"full_name": CI_REPO}})],
+        )
+        for pulls in cases:
+            with self.subTest(pulls=pulls), self.assertRaisesRegex(vmp.PlanError, "more than one"):
+                self.validate(pulls=pulls)
+
+    def test_rejects_malformed_pull_request_lists(self):
+        no_head = merged_pr()
+        del no_head["head"]
+        cases = (None, {}, "pulls", [None], ["pr"], [no_head], [merged_pr(merged_at=1)],
+                 [merged_pr(merged_at="")], [merged_pr(merged_at="  ")],
+                 [merged_pr(merge_commit_sha=None)], [merged_pr(base="main")],
+                 [merged_pr(head={"ref": ["dev"], "repo": {"full_name": CI_REPO}})],
+                 [merged_pr(), None])
+        for pulls in cases:
+            with self.subTest(pulls=pulls), self.assertRaises(vmp.PlanError):
+                vmp.validate_ci_promotion(ci_run(), pulls, CI_REPO, SHA, SHA)
+
+    def test_rejects_invalid_expected_repository(self):
+        for repo in ("", "zonar-hub-api", "incoders/zonar-hub-api/extra", " incoders/zonar-hub-api", None):
+            with self.subTest(repo=repo), self.assertRaisesRegex(vmp.PlanError, "repository"):
+                self.validate(repo=repo)
+        with self.assertRaisesRegex(vmp.PlanError, "repository"):
+            self.validate(repo=FORK)
+
+    def test_error_messages_never_echo_hostile_payload_values(self):
+        hostile = "main\n::stop-commands::tok`touch pwned`"
+        cases = (
+            {"run": ci_run(head_branch=hostile)},
+            {"run": ci_run(event=hostile)},
+            {"run": ci_run(repository={"full_name": hostile})},
+            {"pulls": [merged_pr(head={"ref": hostile, "repo": {"full_name": CI_REPO}})]},
+        )
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(vmp.PlanError) as raised:
+                    self.validate(**kwargs)
+                self.assertNotIn("stop-commands", str(raised.exception))
+                self.assertNotIn("pwned", str(raised.exception))
+
+    def test_does_not_mutate_inputs(self):
+        run, pulls = ci_run(), [merged_pr()]
+        snapshot = json.dumps([run, pulls], sort_keys=True)
+        self.validate(run=run, pulls=pulls)
+        self.assertEqual(json.dumps([run, pulls], sort_keys=True), snapshot)
+
+
 class CommandLineTests(unittest.TestCase):
     def run_main(self, argv, env):
         out, err = io.StringIO(), io.StringIO()
@@ -684,16 +853,17 @@ class PromotionPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         text = PR_WORKFLOW.read_text(encoding="utf-8")
+        cls.text = strip_comments(text)
         cls.script = run_script(step_block(text, POLICY_STEP))
 
     def run_policy(self, **overrides):
-        values = {"BASE_REF": "main", "HEAD_REF": "dev", "HEAD_REPO": REPO,
-                  "BASE_REPO": REPO, "PR_BODY": "Promotes the release.\n\nCloses #42"}
+        values = {"BASE_REF": "main", "HEAD_REF": "dev", "HEAD_REPO": REPO, "BASE_REPO": REPO}
         values.update(overrides)
         env = {key: value for key, value in os.environ.items()
                if key not in {"BASE_REF", "HEAD_REF", "HEAD_REPO", "BASE_REPO", "PR_BODY"}}
         env.update({key: value for key, value in values.items() if value is not None})
         with tempfile.TemporaryDirectory() as workdir:
+            # The script is passed as an argv item, never through a shell.
             completed = subprocess.run([sys.executable, "-c", self.script], env=env, cwd=workdir,
                                        capture_output=True, text=True, check=False)
             self.assertEqual(os.listdir(workdir), [], "policy must not write files")
@@ -706,19 +876,31 @@ class PromotionPolicyTests(unittest.TestCase):
         self.assertIn(reason, completed.stdout)
         return completed
 
-    def test_accepts_same_repository_dev_to_main_with_issue_reference(self):
+    def test_accepts_same_repository_dev_to_main_without_issue_reference(self):
         completed = self.run_policy()
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertNotIn("::error::", completed.stdout)
+        self.assertNotIn("issue", completed.stdout.lower())
         self.assertNotIn("approved", completed.stdout.lower())
 
-    def test_accepts_bare_issue_reference_anywhere_in_body(self):
-        for body in ("#7", "Refs: #7.", "Summary\n\n- part of (#123)"):
+    def test_gate_reads_no_body_issue_or_reviewer_data(self):
+        # The minimal policy only checks refs and repositories; PR prose is never read.
+        for forbidden in ("pull_request.body", "PR_BODY", "issue", "reviewer", "import re"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.text)
+        env_names = re.findall(r"(?m)^          ([A-Z_]+): ", step_block(self.text, POLICY_STEP))
+        self.assertEqual(sorted(env_names), ["BASE_REF", "BASE_REPO", "HEAD_REF", "HEAD_REPO"])
+
+    def test_pull_request_body_has_no_effect(self):
+        for body in ("", "No issue here", "Closes #42"):
             with self.subTest(body=body):
                 self.assertEqual(self.run_policy(PR_BODY=body).returncode, 0)
+                self.assert_rejected("source branch", PR_BODY=body, HEAD_REF="feature/x")
 
     def test_rejects_forked_dev_branch(self):
-        self.assert_rejected("same repository", HEAD_REPO="attacker/zonar-hub-api")
+        for head_repo in ("attacker/zonar-hub-api", REPO.upper(), REPO + " ", "incoders/zonar-hub-api2"):
+            with self.subTest(head_repo=head_repo):
+                self.assert_rejected("same repository", HEAD_REPO=head_repo)
 
     def test_rejects_missing_head_repository(self):
         self.assert_rejected("same repository", HEAD_REPO=None)
@@ -726,36 +908,32 @@ class PromotionPolicyTests(unittest.TestCase):
 
     def test_rejects_missing_base_repository(self):
         self.assert_rejected("same repository", BASE_REPO=None, HEAD_REPO=None)
+        self.assert_rejected("same repository", BASE_REPO="", HEAD_REPO="")
 
     def test_rejects_source_other_than_dev(self):
-        for head in ("feature/x", "Dev", "dev2", "", None):
+        for head in ("feature/x", "Dev", "dev2", "dev ", "refs/heads/dev", "main", "", None):
             with self.subTest(head=head):
                 self.assert_rejected("source branch", HEAD_REF=head)
 
     def test_rejects_base_other_than_main(self):
-        for base in ("dev", "main2", "", None):
+        for base in ("dev", "main2", "Main", "refs/heads/main", "", None):
             with self.subTest(base=base):
                 self.assert_rejected("target branch", BASE_REF=base)
 
-    def test_rejects_body_without_local_issue_reference(self):
-        for body in (None, "", "No issue here", "## Summary", "See other/repo#5", "#0",
-                     "&#35;12", "issue#12", "https://example.com/#12"):
-            with self.subTest(body=body):
-                self.assert_rejected("issue reference", PR_BODY=body)
-
     def test_reports_every_violation_at_once(self):
         completed = self.assert_rejected("same repository", HEAD_REPO="fork/x", HEAD_REF="main",
-                                         BASE_REF="dev", PR_BODY="")
-        for reason in ("source branch", "target branch", "issue reference"):
+                                         BASE_REF="dev")
+        for reason in ("source branch", "target branch"):
             self.assertIn(reason, completed.stdout)
 
     def test_hostile_body_and_branch_are_neither_executed_nor_echoed(self):
         payload = ('"; touch pwned; echo "$(touch pwned)`touch pwned`${{ secrets.X }}\n'
                    "::set-output name=x::y\n::stop-commands::tok\n")
-        accepted = self.run_policy(PR_BODY=payload + "Closes #9")
+        accepted = self.run_policy(PR_BODY=payload)
         self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
-        rejected = self.assert_rejected("issue reference", PR_BODY=payload,
-                                        HEAD_REF="dev$(touch pwned)")
+        rejected = self.assert_rejected("source branch", PR_BODY=payload,
+                                        HEAD_REF="dev$(touch pwned)\n::stop-commands::tok",
+                                        HEAD_REPO="fork/x`touch pwned`")
         for completed in (accepted, rejected):
             output = completed.stdout + completed.stderr
             for fragment in ("pwned", "set-output", "stop-commands", "secrets.X"):
