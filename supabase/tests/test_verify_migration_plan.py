@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1230,6 +1231,249 @@ class PromotionPolicyTests(unittest.TestCase):
             for fragment in ("pwned", "set-output", "stop-commands", "secrets.X"):
                 with self.subTest(fragment=fragment):
                     self.assertNotIn(fragment, output)
+
+
+def job_blocks(text):
+    """Returns each job's text under `jobs:`, keyed by job id, in file order."""
+    jobs = top_level_block(text, "jobs")
+    parts = re.split(r"(?m)^  ([\w-]+):\n", jobs)
+    return dict(zip(parts[1::2], parts[2::2]))
+
+
+GATE_JOB = "verify-promotion"
+GATE_STEP = "Verify main is a green CI push of a merged dev promotion"
+MANUAL_ONLY = "    if: github.event_name == 'workflow_dispatch'\n"
+
+
+class PromotionGateWorkflowTests(unittest.TestCase):
+    """Static assertions on the credential-free CI promotion gate of the deploy workflow."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = strip_comments(DEPLOY_WORKFLOW.read_text(encoding="utf-8"))
+        cls.jobs = job_blocks(cls.text)
+        cls.gate = cls.jobs[GATE_JOB]
+
+    def test_triggers_are_manual_dispatch_and_completed_main_ci_runs_only(self):
+        trigger = top_level_block(self.text, "on")
+        self.assertEqual(re.findall(r"(?m)^  (\w+):", trigger), ["workflow_dispatch", "workflow_run"])
+        workflow_run = trigger.split("  workflow_run:\n", 1)[1]
+        self.assertEqual(re.findall(r"(?m)^    (\w+): (.*)$", workflow_run),
+                         [("workflows", "[CI]"), ("types", "[completed]"), ("branches", "[main]")])
+
+    def test_manual_jobs_cannot_run_on_workflow_run_events(self):
+        self.assertEqual(list(self.jobs), ["preflight", "deploy", GATE_JOB])
+        for job in ("preflight", "deploy"):
+            with self.subTest(job=job):
+                self.assertEqual(re.findall(r"(?m)^    if: .*\n", self.jobs[job]), [MANUAL_ONLY])
+        self.assertRegex(self.jobs["deploy"], r"(?m)^    needs: preflight$")
+
+    def test_gate_runs_only_for_successful_same_repository_main_push_ci(self):
+        condition = re.search(r"(?m)^    if: >-\n((?:^      .*\n)+)", self.gate).group(1)
+        clauses = {clause.strip() for clause in condition.replace("\n", " ").split("&&")}
+        self.assertEqual(clauses, {
+            "github.event_name == 'workflow_run'",
+            "github.event.workflow_run.conclusion == 'success'",
+            "github.event.workflow_run.event == 'push'",
+            "github.event.workflow_run.head_branch == 'main'",
+            "github.event.workflow_run.head_repository.full_name == github.repository",
+        })
+        self.assertNotIn("||", condition)
+
+    def test_gate_token_can_only_read_contents_and_pull_requests(self):
+        permissions = re.search(r"(?m)^    permissions:\n((?:^      .*\n)+)", self.gate).group(1)
+        self.assertEqual(permissions, "      contents: read\n      pull-requests: read\n")
+        self.assertEqual(top_level_block(self.text, "permissions").strip(), "contents: read")
+        self.assertNotIn("write", self.text)
+
+    def test_gate_has_no_environment_secrets_database_or_deploy_coupling(self):
+        for forbidden in ("environment:", "secrets.", "vars.", "SUPABASE_DB_URL", "SUPABASE_PROJECT_REF",
+                          "SUPABASE_APPROVED_BASELINE", "supabase db", "supabase migration",
+                          "supabase-cli", "needs:", "auto-plan", "GITHUB_OUTPUT", "GITHUB_ENV"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.gate)
+        for job, body in self.jobs.items():
+            with self.subTest(job=job):
+                self.assertNotIn(GATE_JOB, re.findall(r"(?m)^    needs: (.*)$", body))
+
+    def test_gate_checks_out_the_exact_ci_head_without_credentials(self):
+        checkout = re.search(r"(?m)^      - uses: actions/checkout@v4\n((?:^        .*\n)+)", self.gate).group(1)
+        self.assertEqual(checkout, "        with:\n"
+                                   "          ref: ${{ github.event.workflow_run.head_sha }}\n"
+                                   "          persist-credentials: false\n")
+        self.assertEqual(len(re.findall(r"\bref:", self.text)), 1)
+        for forbidden in ("pull_request", "refs/pull/", "head_repository.clone", "repository:",
+                          "git fetch", "git clone", "--paginate"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.text)
+
+    def test_gate_calls_github_api_read_only_with_one_bounded_page(self):
+        script = run_script(step_block(self.gate, GATE_STEP))
+        calls = re.findall(r"gh api[^\n]*", script)
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            with self.subTest(call=call):
+                self.assertIn("gh api --method GET ", call)
+                self.assertNotRegex(call, r"\s(-f|-F|--field|--raw-field|--input|-X)\b")
+        self.assertIn('"repos/${GITHUB_REPOSITORY}/git/ref/heads/main"', script)
+        self.assertIn('"repos/${GITHUB_REPOSITORY}/commits/${head_sha}/pulls?per_page=100"', script)
+        self.assertIn("check-ci-promotion", script)
+
+    def test_event_data_reaches_the_gate_script_only_through_files(self):
+        step = step_block(self.gate, GATE_STEP)
+        self.assertNotIn("${{", run_script(step))
+        self.assertEqual(re.findall(r"\$\{\{[^}]*\}\}", step), ["${{ github.token }}"])
+
+    def test_gate_never_displaces_a_queued_manual_deployment(self):
+        group = re.search(r"(?m)^  group: >-\n((?:^    .*\n)+)", top_level_block(self.text, "concurrency") + "\n")
+        self.assertIsNotNone(group)
+        expression = " ".join(group.group(1).split())
+        self.assertEqual(expression,
+                         "${{ github.event_name == 'workflow_dispatch' && 'supabase-production-migrations' "
+                         "|| format('supabase-ci-promotion-{0}', github.event.workflow_run.head_sha) }}")
+        self.assertRegex(top_level_block(self.text, "concurrency"), r"(?m)^  cancel-in-progress: false$")
+
+
+def _posix(path):
+    return str(path).replace("\\", "/")
+
+
+@unittest.skipUnless(shutil.which("bash") and shutil.which("jq"), "bash and jq are required")
+class PromotionGateScriptTests(unittest.TestCase):
+    """Runs the gate's exact shell step against fake `gh`/`git` and GitHub event shapes."""
+
+    @classmethod
+    def setUpClass(cls):
+        text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        cls.script = run_script(step_block(job_blocks(text)[GATE_JOB], GATE_STEP))
+
+    def run_gate(self, event=None, pulls=None, remote=SHA, checkout=SHA, gh_fails=False):
+        event = {"workflow_run": ci_run()} if event is None else event
+        pulls = [merged_pr()] if pulls is None else pulls
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            bin_dir = temp / "bin"
+            bin_dir.mkdir()
+            (temp / "event.json").write_text(json.dumps(event), encoding="utf-8")
+            (temp / "pulls.json").write_text(pulls if isinstance(pulls, str) else json.dumps(pulls),
+                                             encoding="utf-8")
+            log = temp / "gh.log"
+            env_log = temp / "gh-env.log"
+            config_dir = temp / "gh-config"
+            config_dir.mkdir()
+            pulls_answer = ('echo "HTTP 401: Bad credentials" >&2; exit 1' if gh_fails
+                            else f'cat "{_posix(temp / "pulls.json")}"')
+            fakes = {
+                # Records every call and its gh environment; answers the two
+                # read-only endpoints the gate may use.
+                "gh": (f'printf "%s\\n" "$*" >> "{_posix(log)}"\n'
+                       f'printf "%s\\n" "$GH_CONFIG_DIR" "$GH_HOST" "$GH_TOKEN" > "{_posix(env_log)}"\n'
+                       'case "$*" in\n'
+                       f'  *git/ref/heads/main*) printf "%s\\n" "{remote}" ;;\n'
+                       f'  */pulls?per_page=100*) {pulls_answer} ;;\n'
+                       "  *) exit 9 ;;\n"
+                       "esac\n"),
+                "git": f'[ "$*" = "rev-parse HEAD" ] && printf "%s\\n" "{checkout}"\n',
+                "python3": f'exec "{_posix(sys.executable)}" "$@"\n',
+            }
+            for name, body in fakes.items():
+                (bin_dir / name).write_text("#!/bin/sh\n" + body, encoding="utf-8", newline="\n")
+                (bin_dir / name).chmod(0o755)
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("GITHUB_", "GH_", "SUPABASE_"))}
+            # Secondary defense behind the PATH guard: a real gh would find no
+            # stored credentials and could not resolve the reserved host.
+            env.update({"GITHUB_REPOSITORY": CI_REPO, "GITHUB_EVENT_PATH": _posix(temp / "event.json"),
+                        "RUNNER_TEMP": _posix(temp), "GH_TOKEN": "fake-token",
+                        "GH_CONFIG_DIR": _posix(config_dir), "GH_HOST": "gh-host.invalid"})
+            # `cd`/`pwd` yields a PATH-safe directory on Windows too (no drive colon).
+            # The guard aborts before the script if the real gh or git would run.
+            prelude = (f'fake="$(cd "{_posix(bin_dir)}" && pwd)"\nexport PATH="$fake:$PATH"\n'
+                       '[ "$(command -v gh)" = "$fake/gh" ] && [ "$(command -v git)" = "$fake/git" ]'
+                       ' || exit 97\n')
+            completed = subprocess.run(
+                [shutil.which("bash"), "-c", prelude + self.script],
+                env=env, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+            calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+            self.gh_env = env_log.read_text(encoding="utf-8").splitlines() if env_log.exists() else []
+        self.assertNotEqual(completed.returncode, 97, "fake gh/git were not first on PATH")
+        return completed, calls
+
+    def assert_rejected(self, reason, **kwargs):
+        completed, calls = self.run_gate(**kwargs)
+        output = completed.stdout + completed.stderr
+        self.assertNotEqual(completed.returncode, 0, output)
+        self.assertIn(reason, output)
+        self.assertNotIn("CI promotion verified", output)
+        return calls, output
+
+    def test_accepts_green_main_push_ci_of_merged_dev_promotion(self):
+        completed, calls = self.run_gate()
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("CI promotion verified", completed.stdout)
+        self.assertEqual(sorted(calls), sorted([
+            f"api --method GET repos/{CI_REPO}/commits/{SHA}/pulls?per_page=100",
+            f"api --method GET repos/{CI_REPO}/git/ref/heads/main --jq .object.sha",
+        ]))
+
+    def test_rejects_invalid_ci_head_sha_before_calling_github(self):
+        missing = ci_run()
+        del missing["head_sha"]
+        events = ({"workflow_run": ci_run(head_sha=SHA.upper())}, {"workflow_run": ci_run(head_sha=SHA[:7])},
+                  {"workflow_run": ci_run(head_sha=SHA + "\n")}, {"workflow_run": ci_run(head_sha=f"{SHA}/x")},
+                  {"workflow_run": ci_run(head_sha="../" + SHA[3:])}, {"workflow_run": ci_run(head_sha=1)},
+                  {"workflow_run": missing}, {"workflow_run": None}, {"workflow_run": [ci_run()]}, {})
+        for event in events:
+            with self.subTest(event=event):
+                calls, _ = self.assert_rejected("::error::", event=event)
+                self.assertEqual(calls, [])
+
+    def test_rejects_a_full_page_of_associated_pull_requests_as_ambiguous(self):
+        others = [merged_pr(number, merged_at=None, merge_commit_sha=OTHER_SHA) for number in range(8, 107)]
+        calls, output = self.assert_rejected("full page", pulls=[merged_pr()] + others)
+        self.assertNotIn("git/ref/heads/main", "\n".join(calls))
+        completed, _ = self.run_gate(pulls=[merged_pr()] + others[:98])
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+    def test_rejects_malformed_pull_request_responses(self):
+        for pulls in ("{not json", "{}", '"pulls"', "null"):
+            with self.subTest(pulls=pulls):
+                self.assert_rejected("::error::", pulls=pulls)
+
+    def test_fails_closed_for_stale_direct_fork_or_unmerged_promotions(self):
+        cases = (
+            ({"remote": OTHER_SHA}, "stale"),
+            ({"checkout": OTHER_SHA}, "checked out"),
+            ({"pulls": []}, "direct pushes"),
+            ({"pulls": [merged_pr(merged_at=None)]}, "direct pushes"),
+            ({"pulls": [merged_pr(head={"ref": "dev", "repo": {"full_name": FORK}})]}, "same-repository"),
+            ({"pulls": [merged_pr(head={"ref": "feature/x", "repo": {"full_name": CI_REPO}})]}, "dev to main"),
+            ({"event": {"workflow_run": ci_run(event="pull_request")}}, "push"),
+            ({"event": {"workflow_run": ci_run(conclusion="failure")}}, "successful"),
+            ({"event": {"workflow_run": ci_run(head_repository={"full_name": FORK})}}, "repository"),
+        )
+        for kwargs, reason in cases:
+            with self.subTest(kwargs=kwargs):
+                self.assert_rejected(reason, **kwargs)
+
+    def test_gh_runs_against_an_isolated_config_and_unroutable_host(self):
+        self.run_gate()
+        config_dir, host, token = self.gh_env
+        self.assertTrue(config_dir.endswith("/gh-config"), config_dir)
+        self.assertEqual(host, "gh-host.invalid")
+        self.assertEqual(token, "fake-token")
+
+    def test_gh_api_failure_fails_closed_before_the_verifier(self):
+        calls, output = self.assert_rejected("HTTP 401", gh_fails=True)
+        self.assertEqual(calls, [f"api --method GET repos/{CI_REPO}/commits/{SHA}/pulls?per_page=100"])
+        self.assertNotIn("SUPABASE_DB_URL", self.script)
+
+    def test_hostile_event_values_are_neither_executed_nor_echoed(self):
+        hostile = "main$(touch pwned)`touch pwned`\n::stop-commands::tok"
+        _, output = self.assert_rejected("main", event={"workflow_run": ci_run(head_branch=hostile)})
+        self.assertNotIn("stop-commands", output)
+        self.assertNotIn("pwned", output)
+        self.assertFalse((REPO_ROOT / "pwned").exists())
 
 
 if __name__ == "__main__":

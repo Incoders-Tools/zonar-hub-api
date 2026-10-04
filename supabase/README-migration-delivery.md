@@ -13,6 +13,20 @@ repository applies migrations automatically. Every database operation needs:
 Pull requests and pushes never touch a hosted database. `ci.yml` runs every
 migration against a disposable PostgreSQL 17 container and has no secrets.
 
+### Interim: CI promotion gate (does not deploy)
+
+A completed `CI` run on `main` also triggers the workflow's `verify-promotion`
+job. It checks out the exact CI head SHA without persisted credentials, reads
+the run from the event, and calls `check-ci-promotion` with read-only
+`gh api` data (current `main` head and one page of associated PRs). It fails
+closed when the run is not a green push on `main`, `main` has moved, the commit
+has no merged same-repository `dev` to `main` PR, the SHA is malformed or the PR
+page is full. Its token can only read contents and pull requests; it has no
+environment, secrets or database URL, and no job depends on it, so it applies
+nothing. The manual `preflight` and `deploy` jobs run only on
+`workflow_dispatch` and remain the only delivery path for now. CI-run gates use
+a per-commit concurrency group and never displace a queued manual deployment.
+
 ## Guarantees
 
 The workflow stops before connecting if any check fails.

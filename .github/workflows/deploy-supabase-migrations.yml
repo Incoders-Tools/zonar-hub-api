@@ -4,6 +4,11 @@ name: Deploy Supabase migrations
 # requires an operator to dispatch this workflow by hand from main, after the
 # change has been merged, and a reviewer to approve the protected
 # `supabase-production` environment. See supabase/README-migration-delivery.md.
+#
+# A completed `CI` run on main also triggers the credential-free
+# `verify-promotion` gate. It only proves that main is a green CI push of a
+# merged same-repository dev PR; it has no database access and nothing deploys
+# from it yet.
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +24,10 @@ on:
         description: Exact comma-separated migration versions expected to be pending, in apply order
         required: true
         type: string
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -29,15 +38,20 @@ env:
   DO_NOT_TRACK: "1"
 
 concurrency:
-  # One static group serializes every run. A running deployment is never
+  # One static group serializes every manual run. A running deployment is never
   # cancelled; a newer dispatch may displace a queued one, which then has to be
-  # dispatched again (the SHA preflight rejects it if main has moved).
-  group: supabase-production-migrations
+  # dispatched again (the SHA preflight rejects it if main has moved). CI-run
+  # gates use a per-commit group so they never displace a queued deployment.
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch'
+    && 'supabase-production-migrations'
+    || format('supabase-ci-promotion-{0}', github.event.workflow_run.head_sha) }}
   cancel-in-progress: false
 
 jobs:
   preflight:
     name: Preflight (no secrets)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -68,6 +82,7 @@ jobs:
   deploy:
     name: Apply approved migrations
     needs: preflight
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # Step timeouts below keep "Apply migrations" plus "Verify remote migration
     # history" well inside this limit, so a hung push fails the step (and the
@@ -212,3 +227,58 @@ jobs:
           python3 supabase/scripts/verify_migration_plan.py verify-applied \
             --migrations-dir supabase/migrations \
             --list-json "$RUNNER_TEMP/history-after.json"
+
+  # Read-only provenance gate for CI runs on main. It has no environment, no
+  # secrets and no database URL, and no job depends on it yet.
+  verify-promotion:
+    name: Verify CI promotion (no secrets)
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      # Event data is read from the event file, never interpolated into the
+      # script. The head SHA is validated before it is used in an API path, and
+      # a full page of associated PRs is rejected because more may exist.
+      - name: Verify main is a green CI push of a merged dev promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_json="$RUNNER_TEMP/ci-run.json"
+          pulls_json="$RUNNER_TEMP/ci-pulls.json"
+          if ! jq --exit-status '.workflow_run | objects' "$GITHUB_EVENT_PATH" > "$run_json" 2> /dev/null; then
+            echo "::error::Event has no workflow_run object."
+            exit 1
+          fi
+          # The length check stops a trailing newline that $(...) would strip.
+          head_sha="$(jq --join-output '.head_sha | strings | select(length == 40)' "$run_json")"
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::CI head SHA is malformed."
+            exit 1
+          fi
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/pulls?per_page=100" > "$pulls_json"
+          if ! count="$(jq --exit-status 'if type == "array" then length else false end' "$pulls_json" 2> /dev/null)"; then
+            echo "::error::Associated pull request response is malformed."
+            exit 1
+          fi
+          if (( count >= 100 )); then
+            echo "::error::A full page of associated pull requests is ambiguous; refusing to verify."
+            exit 1
+          fi
+          remote_main_sha="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          CHECKOUT_SHA="$(git rev-parse HEAD)" REMOTE_MAIN_SHA="$remote_main_sha" \
+            python3 supabase/scripts/verify_migration_plan.py check-ci-promotion \
+              --run-json "$run_json" --pulls-json "$pulls_json"
