@@ -209,6 +209,141 @@ class PlanTests(unittest.TestCase):
                                BASELINE, VERSIONS[3:])
 
 
+def up_to_date():
+    """Supabase CLI 2.109.0 `db push --dry-run` no-op output, stdout followed by stderr.
+
+    Observed against disposable PostgreSQL 17: the up-to-date line is written to
+    stdout while the DRY RUN banner and any pending list go to stderr, so callers
+    must pass both streams.
+    """
+    return ("Remote database is up to date.\n"
+            "WARN: config section [inbucket] is deprecated. Please use [local_smtp] instead.\n"
+            "DRY RUN: migrations will *not* be pushed to the database.\n"
+            "Connecting to remote database...\n"
+            "A new version of Supabase CLI is available: v2.119.0 (currently installed v2.109.0)\n"
+            "We recommend updating regularly for new features and bug fixes: "
+            "https://supabase.com/docs/guides/cli/getting-started#updating-the-supabase-cli\n")
+
+
+class AutoPlanTests(unittest.TestCase):
+    """Pending migrations are derived from CLI state instead of an operator list."""
+
+    def manifest(self):
+        return [vmp.ManifestEntry(v, f) for v, f in zip(VERSIONS, FILES)]
+
+    def history(self, remote, local=None):
+        return vmp.parse_migration_list(rows(VERSIONS if local is None else local, remote))
+
+    def test_derive_pending_returns_exact_manifest_suffix(self):
+        for applied in (2, 3, 4):
+            with self.subTest(applied=applied):
+                pending = vmp.derive_pending(self.manifest(), self.history(VERSIONS[:applied]), BASELINE)
+                self.assertEqual(pending, self.manifest()[applied:])
+
+    def test_derive_pending_is_empty_when_remote_is_complete(self):
+        self.assertEqual(vmp.derive_pending(self.manifest(), self.history(VERSIONS), BASELINE), [])
+
+    def test_derive_pending_rejects_untrustworthy_history(self):
+        gap = json.dumps({"migrations": [
+            {"local": VERSIONS[0], "remote": VERSIONS[0]},
+            {"local": VERSIONS[1], "remote": VERSIONS[1]},
+            {"local": VERSIONS[2], "remote": ""},
+            {"local": VERSIONS[3], "remote": VERSIONS[3]},
+            {"local": VERSIONS[4], "remote": ""},
+        ]})
+        blank_row = json.dumps({"migrations": json.loads(rows(VERSIONS, VERSIONS[:3]))["migrations"]
+                                + [{"local": "", "remote": ""}]})
+        cases = (
+            (self.history(VERSIONS + ["20990101000000"], VERSIONS), BASELINE, "remote-only"),
+            (vmp.parse_migration_list(gap), BASELINE, "contiguous"),
+            (self.history([]), BASELINE, "empty"),
+            (self.history(VERSIONS[:1]), BASELINE, "baseline"),
+            (self.history(VERSIONS[:3]), "20990101000000", "baseline"),
+            (self.history(VERSIONS[:3]), "", "baseline"),
+            (self.history([VERSIONS[1], VERSIONS[0], VERSIONS[2]]), BASELINE, "diverge"),
+            (self.history(VERSIONS[:3], [VERSIONS[1], VERSIONS[0]] + VERSIONS[2:]), BASELINE, "manifest"),
+            (self.history(VERSIONS[:3], VERSIONS[:-1]), BASELINE, "manifest"),
+            (self.history(VERSIONS[:3], VERSIONS + [VERSIONS[0]]), BASELINE, "manifest"),
+            (vmp.parse_migration_list(blank_row), BASELINE, "malformed"),
+        )
+        for history, baseline, message in cases:
+            with self.subTest(message=message, baseline=baseline), \
+                    self.assertRaisesRegex(vmp.PlanError, message):
+                vmp.derive_pending(self.manifest(), history, baseline)
+
+    def test_check_auto_plan_requires_dry_run_with_exact_ordered_pending_files(self):
+        self.assertEqual(
+            vmp.check_auto_plan(self.manifest(), self.history(VERSIONS[:3]), BASELINE, dry_run(FILES[3:])),
+            FILES[3:],
+        )
+        mismatches = (
+            dry_run(FILES[4:]),                              # fewer files than pending
+            dry_run(FILES[2:]),                              # extra file already applied
+            dry_run([FILES[4], FILES[3]]),                   # reordered
+            dry_run(FILES[3:] + ["20990101000000_x.sql"]),   # file outside the manifest
+        )
+        for text in mismatches:
+            with self.subTest(text=text), self.assertRaisesRegex(vmp.PlanError, "dry run"):
+                vmp.check_auto_plan(self.manifest(), self.history(VERSIONS[:3]), BASELINE, text)
+
+    def test_check_auto_plan_rejects_output_that_hides_pending_migrations(self):
+        for text in (None, "", up_to_date(), dry_run([]), "Would push these migrations:\n",
+                     dry_run(FILES[3:]) + "Remote database is up to date.\n"):
+            with self.subTest(text=text), self.assertRaises(vmp.PlanError):
+                vmp.check_auto_plan(self.manifest(), self.history(VERSIONS[:3]), BASELINE, text)
+
+    def test_check_auto_plan_accepts_no_op_only_with_exact_up_to_date_signal(self):
+        complete = self.history(VERSIONS)
+        self.assertEqual(vmp.check_auto_plan(self.manifest(), complete, BASELINE, None), [])
+        self.assertEqual(vmp.check_auto_plan(self.manifest(), complete, BASELINE, up_to_date()), [])
+        stderr_only = up_to_date().split("\n", 1)[1]
+        for text in ("", stderr_only, "Remote database is up to date\n",
+                     "Remote database is not up to date.\n", dry_run(FILES[4:]),
+                     up_to_date() + "Would push these migrations:\n",
+                     up_to_date() + " \u2022 " + FILES[4] + "\n"):
+            with self.subTest(text=text), self.assertRaisesRegex(vmp.PlanError, "up to date"):
+                vmp.check_auto_plan(self.manifest(), complete, BASELINE, text)
+
+    def test_check_auto_plan_rejects_up_to_date_signal_alongside_diagnostic_errors(self):
+        # Benign CLI warnings stay accepted; any error diagnostic voids the no-op signal.
+        complete = self.history(VERSIONS)
+        diagnostics = (
+            "ERROR: relation \"schema_migrations\" does not exist\n",
+            "error: unexpected EOF\n",
+            "FATAL: password authentication failed for user \"postgres\"\n",
+            "failed to connect to postgres: failed to connect to `host=127.0.0.1 user=postgres "
+            "database=postgres`: tls error (server refused TLS connection)\n",
+            "Try rerunning the command with --debug to troubleshoot the error.\n",
+            "panic: runtime error: invalid memory address\n",
+        )
+        for line in diagnostics:
+            for text in (up_to_date() + line, line + up_to_date()):
+                with self.subTest(text=text), self.assertRaisesRegex(vmp.PlanError, "up to date"):
+                    vmp.check_auto_plan(self.manifest(), complete, BASELINE, text)
+
+    def test_check_auto_plan_validates_history_before_trusting_dry_run(self):
+        with self.assertRaisesRegex(vmp.PlanError, "remote-only"):
+            vmp.check_auto_plan(self.manifest(), self.history(VERSIONS + ["20990101000000"], VERSIONS),
+                                BASELINE, up_to_date())
+
+    def test_verify_auto_applied_requires_complete_manifest_history(self):
+        vmp.verify_auto_applied(self.manifest(), self.history(VERSIONS), BASELINE)
+        partial_gap = json.dumps({"migrations": json.loads(rows(VERSIONS, VERSIONS[:3]))["migrations"][:3] + [
+            {"local": VERSIONS[3], "remote": ""},
+            {"local": VERSIONS[4], "remote": VERSIONS[4]},
+        ]})
+        cases = (
+            self.history(VERSIONS[:4]),                               # partial apply
+            self.history(VERSIONS[:3]),                               # nothing applied
+            vmp.parse_migration_list(partial_gap),                    # out-of-order apply
+            self.history(VERSIONS + ["20990101000000"], VERSIONS),    # extra remote version
+            self.history([]),                                         # history vanished
+        )
+        for history in cases:
+            with self.subTest(history=history), self.assertRaisesRegex(vmp.PlanError, "applied"):
+                vmp.verify_auto_applied(self.manifest(), history, BASELINE)
+
+
 class DatabaseUrlTests(unittest.TestCase):
     def test_accepts_direct_host_with_required_or_stronger_tls(self):
         for mode in ("require", "verify-ca", "verify-full"):

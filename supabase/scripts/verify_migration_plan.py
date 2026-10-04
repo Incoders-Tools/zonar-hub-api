@@ -31,6 +31,11 @@ VERSION_PATTERN = re.compile(r"^[0-9]+$")
 MIGRATION_FILE_PATTERN = re.compile(r"^([0-9]+)_[A-Za-z0-9_.-]+\.sql$")
 DRY_RUN_HEADER = "Would push these migrations:"
 DRY_RUN_ITEM = re.compile(r"^\s*•\s+(\S+\.sql)\s*$")
+# Exact line Supabase CLI 2.109.0 prints when `db push --dry-run` has nothing to apply.
+DRY_RUN_UP_TO_DATE = "Remote database is up to date."
+# Diagnostic words that void a no-op signal. Benign CLI 2.109.0 output (WARN config
+# notices, DRY RUN banner, Connecting, update notice) contains none of them.
+DRY_RUN_DIAGNOSTIC = re.compile(r"\b(?:error|fatal|panic|failed)\b", re.IGNORECASE)
 TLS_MODES = {"require", "verify-ca", "verify-full"}
 # Only these libpq query parameters are allowed; host/hostaddr/port/service
 # overrides could silently redirect the connection away from the checked host.
@@ -172,6 +177,68 @@ def verify_applied(
         raise PlanError(f"Approved migrations are not applied as expected: {error}") from error
     if remote[-len(expected):] != list(expected):
         raise PlanError("Approved migrations are not applied as expected.")
+
+
+def derive_pending(
+    manifest: Sequence[ManifestEntry],
+    history: Sequence[HistoryRow],
+    baseline: str,
+) -> list[ManifestEntry]:
+    """Returns the exact manifest suffix missing remotely, or [] when the remote is complete."""
+    if any(not row.local and not row.remote for row in history):
+        raise PlanError("Migration list contains a malformed row with no version.")
+    remote = _remote_prefix(manifest, history, baseline)
+    return list(manifest[len(remote):])
+
+
+def _is_up_to_date(dry_run_text: str) -> bool:
+    """True only for the CLI no-op signal without any header, listed migration or error diagnostic."""
+    lines = [line.strip() for line in dry_run_text.splitlines()]
+    return (DRY_RUN_UP_TO_DATE in lines
+            and DRY_RUN_HEADER not in lines
+            and not any(DRY_RUN_ITEM.match(line) for line in dry_run_text.splitlines())
+            and not any(DRY_RUN_DIAGNOSTIC.search(line) for line in lines))
+
+
+def check_auto_plan(
+    manifest: Sequence[ManifestEntry],
+    history: Sequence[HistoryRow],
+    baseline: str,
+    dry_run_text: str | None,
+) -> list[str]:
+    """Returns the filenames to apply when the CLI dry run agrees exactly with derived pending.
+
+    Pending migrations always require dry-run output listing exactly those files in
+    order. With nothing pending the dry run may be skipped (None); when it is
+    consulted it must carry the exact up-to-date signal and nothing else to apply.
+    """
+    pending = derive_pending(manifest, history, baseline)
+    if not pending:
+        if dry_run_text is not None and not _is_up_to_date(dry_run_text):
+            raise PlanError("Dry run is not the exact up to date signal although nothing is pending.")
+        return []
+    if dry_run_text is None:
+        raise PlanError("Supabase dry run output is required when migrations are pending.")
+    if DRY_RUN_UP_TO_DATE in (line.strip() for line in dry_run_text.splitlines()):
+        raise PlanError("Supabase dry run reports up to date although migrations are pending.")
+    files = [entry.filename for entry in pending]
+    if parse_dry_run(dry_run_text) != files:
+        raise PlanError("Supabase dry run does not match the derived pending migrations.")
+    return files
+
+
+def verify_auto_applied(
+    manifest: Sequence[ManifestEntry],
+    history: Sequence[HistoryRow],
+    baseline: str,
+) -> None:
+    """Confirms the remote history now equals the complete local manifest."""
+    try:
+        pending = derive_pending(manifest, history, baseline)
+    except PlanError as error:
+        raise PlanError(f"Migrations are not applied as expected: {error}") from error
+    if pending:
+        raise PlanError("Migrations are not applied as expected: remote history is partial.")
 
 
 def validate_project_ref(project_ref: str) -> None:
