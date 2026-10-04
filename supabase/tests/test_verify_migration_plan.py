@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -675,6 +676,15 @@ class CommandLineTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             vmp.main(["unknown"], {})
 
+    def test_manual_commands_still_require_the_operator_approved_list(self):
+        with tempfile.TemporaryDirectory() as folder:
+            migrations = self.migrations_dir(folder)
+            listing = self.write(folder, "list.json", rows(VERSIONS, VERSIONS))
+            code, output = self.run_main(["verify-applied", "--migrations-dir", migrations,
+                                          "--list-json", listing], {"SUPABASE_APPROVED_BASELINE": BASELINE})
+        self.assertEqual(code, 1)
+        self.assertIn("empty", output)
+
     def test_script_entry_point_exit_code_and_output_hide_the_secret(self):
         script = Path(vmp.__file__)
         env = {**os.environ, "SUPABASE_DB_URL": GOOD_URL.replace("sslmode=require", "sslmode=allow"),
@@ -684,6 +694,287 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         self.assertIn("sslmode", completed.stderr)
         self.assertNotIn(SECRET, completed.stdout + completed.stderr)
+
+
+# Hostile text planted in CLI and GitHub payloads; no command output may echo it.
+HOSTILE = "::stop-commands::tok`touch pwned`"
+
+
+class AutoCommandLineTests(unittest.TestCase):
+    """CLI entry points for the automatic CI-gated delivery path."""
+
+    def setUp(self):
+        workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(workdir.cleanup)
+        self.folder = workdir.name
+        self.migrations = str(Path(self.folder, "migrations"))
+        Path(self.migrations).mkdir()
+        for name in FILES:
+            Path(self.migrations, name).write_text("select 1;\n", encoding="utf-8")
+        self.output = self.write("github_output", "")
+
+    def write(self, name, text):
+        path = Path(self.folder, name)
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def run_main(self, argv, env):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = vmp.main(argv, env)
+        return code, out.getvalue() + err.getvalue()
+
+    def outputs(self):
+        return Path(self.output).read_text(encoding="utf-8")
+
+    # check-ci-promotion -------------------------------------------------
+
+    def promotion_env(self, **overrides):
+        env = {"GITHUB_REPOSITORY": CI_REPO, "CHECKOUT_SHA": SHA, "REMOTE_MAIN_SHA": SHA}
+        env.update(overrides)
+        return env
+
+    def promote(self, run=None, pulls=None, env=None, run_text=None, pulls_text=None):
+        run_path = self.write("run.json", json.dumps(ci_run() if run is None else run)
+                              if run_text is None else run_text)
+        pulls_path = self.write("pulls.json", json.dumps([merged_pr()] if pulls is None else pulls)
+                                if pulls_text is None else pulls_text)
+        return self.run_main(["check-ci-promotion", "--run-json", run_path, "--pulls-json", pulls_path],
+                             self.promotion_env() if env is None else env)
+
+    def test_check_ci_promotion_accepts_green_dev_promotion_from_files(self):
+        code, output = self.promote()
+        self.assertEqual(code, 0, output)
+        self.assertIn("CI promotion verified", output)
+        self.assertEqual(self.outputs(), "", "promotion check must not write outputs")
+
+    def test_check_ci_promotion_rejects_invalid_or_missing_json_with_fixed_messages(self):
+        cases = (
+            ({"run_text": "{not json " + HOSTILE}, "workflow run"),
+            ({"run_text": ""}, "workflow run"),
+            ({"pulls_text": "[" + HOSTILE}, "pull request"),
+            ({"pulls_text": ""}, "pull request"),
+        )
+        for kwargs, message in cases:
+            with self.subTest(kwargs=kwargs):
+                code, output = self.promote(**kwargs)
+                self.assertEqual(code, 1)
+                self.assertIn("::error::", output)
+                self.assertIn(message, output)
+                self.assertIn("not valid JSON", output)
+                self.assertNotIn("pwned", output)
+        for missing in ("--run-json", "--pulls-json"):
+            with self.subTest(missing=missing):
+                argv = ["check-ci-promotion", "--run-json", self.write("run.json", json.dumps(ci_run())),
+                        "--pulls-json", self.write("pulls.json", json.dumps([merged_pr()]))]
+                argv[argv.index(missing) + 1] = str(Path(self.folder, "absent.json"))
+                code, output = self.run_main(argv, self.promotion_env())
+                self.assertEqual(code, 1)
+                self.assertIn("missing or unreadable", output)
+
+    def test_check_ci_promotion_binds_to_environment_repository_and_shas(self):
+        cases = (
+            (self.promotion_env(GITHUB_REPOSITORY=FORK), "repository"),
+            ({"CHECKOUT_SHA": SHA, "REMOTE_MAIN_SHA": SHA}, "repository"),
+            (self.promotion_env(CHECKOUT_SHA=OTHER_SHA), "checked out"),
+            ({"GITHUB_REPOSITORY": CI_REPO, "REMOTE_MAIN_SHA": SHA}, "checked out"),
+            (self.promotion_env(REMOTE_MAIN_SHA=OTHER_SHA), "stale"),
+            ({"GITHUB_REPOSITORY": CI_REPO, "CHECKOUT_SHA": SHA}, "stale"),
+        )
+        for env, message in cases:
+            with self.subTest(env=env):
+                code, output = self.promote(env=env)
+                self.assertEqual(code, 1)
+                self.assertIn(message, output)
+
+    def test_check_ci_promotion_rejects_untrusted_runs_without_echoing_payloads(self):
+        cases = (
+            {"run": ci_run(conclusion="failure", head_branch="main\n" + HOSTILE)},
+            {"run": ci_run(event=HOSTILE)},
+            {"run": [HOSTILE]},
+            {"pulls": []},
+            {"pulls": [merged_pr(head={"ref": HOSTILE, "repo": {"full_name": CI_REPO}})]},
+            {"pulls": {"items": HOSTILE}},
+        )
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                code, output = self.promote(**kwargs)
+                self.assertEqual(code, 1)
+                self.assertIn("::error::", output)
+                self.assertNotIn("pwned", output)
+                self.assertNotIn("stop-commands", output)
+
+    # auto-plan ------------------------------------------------------------
+
+    def auto_env(self, **overrides):
+        env = {"SUPABASE_APPROVED_BASELINE": BASELINE, "GITHUB_OUTPUT": self.output}
+        env.update(overrides)
+        return {key: value for key, value in env.items() if value is not None}
+
+    def auto_plan(self, remote, log_text, env=None, listing=None):
+        list_path = self.write("list.json", rows(VERSIONS, remote) if listing is None else listing)
+        log_path = self.write("dry.log", log_text)
+        return self.run_main(["auto-plan", "--migrations-dir", self.migrations, "--list-json", list_path,
+                              "--dry-run-log", log_path], self.auto_env() if env is None else env)
+
+    def test_auto_plan_writes_pending_outputs_after_full_validation(self):
+        log = dry_run(FILES[3:]) + HOSTILE + "\n"
+        code, output = self.auto_plan(VERSIONS[:3], log)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.outputs(), "pending=true\npending_count=2\n")
+        self.assertIn(FILES[3], output)
+        for fragment in ("pwned", "Connecting", "DRY RUN", "Would push"):
+            with self.subTest(fragment=fragment):
+                self.assertNotIn(fragment, output)
+
+    def test_auto_plan_no_op_succeeds_with_zero_pending(self):
+        code, output = self.auto_plan(VERSIONS, up_to_date())
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.outputs(), "pending=false\npending_count=0\n")
+        self.assertNotIn("Remote database is up to date", output)
+        self.assertNotIn("WARN", output)
+
+    def test_auto_plan_appends_after_existing_newline_terminated_outputs(self):
+        Path(self.output).write_text("other=1\n", encoding="utf-8")
+        code, output = self.auto_plan(VERSIONS[:4], dry_run(FILES[4:]))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.outputs(), "other=1\npending=true\npending_count=1\n")
+
+    def test_auto_plan_failed_preflight_writes_no_output(self):
+        gap = json.dumps({"migrations": [
+            {"local": VERSIONS[0], "remote": VERSIONS[0]},
+            {"local": VERSIONS[1], "remote": VERSIONS[1]},
+            {"local": VERSIONS[2], "remote": ""},
+            {"local": VERSIONS[3], "remote": VERSIONS[3]},
+            {"local": VERSIONS[4], "remote": ""},
+        ]})
+        cases = (
+            (VERSIONS[:3], dry_run(FILES[4:]), None, "dry run"),
+            (VERSIONS[:3], up_to_date(), None, "up to date"),
+            (VERSIONS, up_to_date() + "FATAL: " + HOSTILE + "\n", None, "up to date"),
+            (VERSIONS, dry_run(FILES[4:]), None, "up to date"),
+            (VERSIONS[:3], dry_run(FILES[3:]), "not json " + HOSTILE, "not valid JSON"),
+            (VERSIONS[:3], dry_run(FILES[3:]), json.dumps({"migrations": [{"local": HOSTILE, "remote": 1}]}),
+             "unexpected shape"),
+            (VERSIONS[:3], dry_run(FILES[3:]), gap, "contiguous"),
+            (VERSIONS + ["20990101000000"], up_to_date(), rows(VERSIONS, VERSIONS + ["20990101000000"]),
+             "remote-only"),
+        )
+        for remote, log, listing, message in cases:
+            with self.subTest(message=message, log=log[:30]):
+                code, output = self.auto_plan(remote, log, listing=listing)
+                self.assertEqual(code, 1)
+                self.assertIn(message, output)
+                self.assertNotIn("pwned", output)
+                self.assertEqual(self.outputs(), "", "no output may be written on failure")
+
+    def test_auto_plan_rejects_missing_or_invalid_baseline_and_inputs_without_output(self):
+        cases = (
+            (self.auto_env(SUPABASE_APPROVED_BASELINE=None), "BASELINE"),
+            (self.auto_env(SUPABASE_APPROVED_BASELINE="2026; drop"), "BASELINE"),
+            (self.auto_env(SUPABASE_APPROVED_BASELINE="20990101000000"), "baseline"),
+        )
+        for env, message in cases:
+            with self.subTest(env=env):
+                code, output = self.auto_plan(VERSIONS[:3], dry_run(FILES[3:]), env=env)
+                self.assertEqual(code, 1)
+                self.assertIn(message, output)
+                self.assertEqual(self.outputs(), "")
+        for flag in ("--migrations-dir", "--list-json", "--dry-run-log"):
+            with self.subTest(flag=flag):
+                argv = ["auto-plan", "--migrations-dir", self.migrations,
+                        "--list-json", self.write("list.json", rows(VERSIONS, VERSIONS[:3])),
+                        "--dry-run-log", self.write("dry.log", dry_run(FILES[3:]))]
+                argv[argv.index(flag) + 1] = str(Path(self.folder, "absent"))
+                code, output = self.run_main(argv, self.auto_env())
+                self.assertEqual(code, 1)
+                self.assertIn("::error::", output)
+                self.assertEqual(self.outputs(), "")
+
+    def test_auto_plan_requires_trusted_github_output_file(self):
+        directory = Path(self.folder, "output_dir")
+        directory.mkdir()
+        for value in (None, "", "relative/github_output", str(Path(self.folder, "absent_output")),
+                      str(directory), self.output + "\npending=true", self.output + "\r",
+                      self.output + "\x00", self.output + "\t"):
+            with self.subTest(value=value):
+                code, output = self.auto_plan(VERSIONS[:3], dry_run(FILES[3:]),
+                                              env=self.auto_env(GITHUB_OUTPUT=value))
+                self.assertEqual(code, 1)
+                self.assertIn("GITHUB_OUTPUT", output)
+                self.assertNotIn("pending=true", output)
+                self.assertEqual(self.outputs(), "")
+                self.assertFalse(Path(self.folder, "absent_output").exists())
+
+    def test_auto_plan_rejects_malformed_existing_output_file(self):
+        for existing in ("other=1", "pending=false\n", "pending_count=9\n", "pending<<EOF\ntrue\nEOF\n",
+                         "x=1\npending_count<<EOF\n0\nEOF\n"):
+            with self.subTest(existing=existing):
+                Path(self.output).write_text(existing, encoding="utf-8")
+                code, output = self.auto_plan(VERSIONS[:3], dry_run(FILES[3:]))
+                self.assertEqual(code, 1)
+                self.assertIn("GITHUB_OUTPUT", output)
+                self.assertEqual(self.outputs(), existing)
+        Path(self.output).write_bytes(b"\xff\xfe\n")
+        code, output = self.auto_plan(VERSIONS[:3], dry_run(FILES[3:]))
+        self.assertEqual(code, 1)
+        self.assertIn("GITHUB_OUTPUT file is unreadable", output)
+        self.assertEqual(Path(self.output).read_bytes(), b"\xff\xfe\n")
+
+    def test_auto_plan_checks_output_file_before_trusting_cli_files(self):
+        # Output trust is checked first, so a bad GITHUB_OUTPUT is reported even when
+        # the CLI files are also broken, and no CLI file content is ever parsed.
+        code, output = self.auto_plan(VERSIONS[:3], dry_run(FILES[4:]), listing="not json",
+                                      env=self.auto_env(GITHUB_OUTPUT=""))
+        self.assertEqual(code, 1)
+        self.assertIn("GITHUB_OUTPUT", output)
+        self.assertNotIn("JSON", output)
+
+    def test_auto_plan_reports_unwritable_output_without_partial_values(self):
+        # Defensive path: the file passed the trust check but the append itself fails.
+        with mock.patch.object(vmp, "_write_outputs", side_effect=OSError(HOSTILE)):
+            code, output = self.auto_plan(VERSIONS[:3], dry_run(FILES[3:]))
+        self.assertEqual(code, 1)
+        self.assertIn("GITHUB_OUTPUT could not be written", output)
+        self.assertNotIn("pwned", output)
+        self.assertEqual(self.outputs(), "")
+
+    # verify-auto-applied --------------------------------------------------
+
+    def verify(self, listing, env=None):
+        list_path = self.write("after.json", listing)
+        return self.run_main(["verify-auto-applied", "--migrations-dir", self.migrations,
+                              "--list-json", list_path], self.auto_env() if env is None else env)
+
+    def test_verify_auto_applied_accepts_complete_history_without_writing(self):
+        code, output = self.verify(rows(VERSIONS, VERSIONS))
+        self.assertEqual(code, 0, output)
+        self.assertIn("complete local manifest", output)
+        self.assertEqual(self.outputs(), "")
+
+    def test_verify_auto_applied_rejects_partial_or_untrusted_history(self):
+        cases = (
+            (rows(VERSIONS, VERSIONS[:4]), "partial"),
+            (rows(VERSIONS, VERSIONS[:3]), "partial"),
+            (rows(VERSIONS, VERSIONS + ["20990101000000"]), "remote-only"),
+            (rows(VERSIONS, []), "empty"),
+            ("not json " + HOSTILE, "not valid JSON"),
+        )
+        for listing, message in cases:
+            with self.subTest(message=message):
+                code, output = self.verify(listing)
+                self.assertEqual(code, 1)
+                self.assertIn(message, output)
+                self.assertNotIn("pwned", output)
+                self.assertEqual(self.outputs(), "")
+        code, output = self.verify(rows(VERSIONS, VERSIONS),
+                                   env=self.auto_env(SUPABASE_APPROVED_BASELINE=None, GITHUB_OUTPUT=None))
+        self.assertEqual(code, 1)
+        self.assertIn("BASELINE", output)
+
+    def test_verify_auto_applied_needs_no_operator_list_or_output_file(self):
+        code, output = self.verify(rows(VERSIONS, VERSIONS), env={"SUPABASE_APPROVED_BASELINE": BASELINE})
+        self.assertEqual(code, 0, output)
 
 
 def strip_comments(text):

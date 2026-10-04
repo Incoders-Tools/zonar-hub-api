@@ -11,6 +11,9 @@ Subcommands:
   check-db-url    validate SUPABASE_DB_URL against the approved project ref
   check-plan      compare manifest, remote history, dry run and approved list
   verify-applied  confirm the remote history after `supabase db push`
+  check-ci-promotion   prove main is a green CI run of a merged dev to main PR
+  auto-plan            derive pending migrations and write GITHUB_OUTPUT values
+  verify-auto-applied  confirm the remote history equals the full local manifest
 """
 
 from __future__ import annotations
@@ -48,6 +51,9 @@ DIRECT_DATABASE_PATH = "/postgres"
 # The only workflow whose push run on main may authorize a production apply.
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# Step output names written by `auto-plan`; an existing definition would make them ambiguous.
+AUTO_PLAN_OUTPUTS = ("pending", "pending_count")
+OUTPUT_NAME = re.compile(r"^([^=<]*)(?:=|<<)")
 
 
 class PlanError(Exception):
@@ -386,8 +392,86 @@ def _read(path: str) -> str:
         raise PlanError("Required CLI output file is missing or unreadable.") from error
 
 
+def _read_json(path: str, label: str) -> object:
+    """Parses a trusted JSON file; the error never quotes its content."""
+    try:
+        return json.loads(_read(path))
+    except ValueError:
+        raise PlanError(f"{label} file is not valid JSON.") from None
+
+
+def _read_baseline(env: Mapping[str, str]) -> str:
+    baseline = env.get("SUPABASE_APPROVED_BASELINE", "")
+    if not VERSION_PATTERN.match(baseline):
+        raise PlanError("SUPABASE_APPROVED_BASELINE is missing or invalid.")
+    return baseline
+
+
+def _trusted_output_file(value: str) -> Path:
+    """Returns GITHUB_OUTPUT only when it is an absolute existing file safe to append to.
+
+    Control characters in the path, a missing or non-regular file, a last line without
+    a newline, or an existing definition of an auto-plan output all fail closed.
+    """
+    if not value or any(ord(char) < 32 for char in value) or not os.path.isabs(value):
+        raise PlanError("GITHUB_OUTPUT must be an absolute path without control characters.")
+    path = Path(value)
+    if not path.is_file():
+        raise PlanError("GITHUB_OUTPUT does not point to an existing file.")
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        raise PlanError("GITHUB_OUTPUT file is unreadable.") from None
+    if existing and not existing.endswith("\n"):
+        raise PlanError("GITHUB_OUTPUT file does not end with a newline.")
+    for line in existing.splitlines():
+        match = OUTPUT_NAME.match(line)
+        if match and match.group(1) in AUTO_PLAN_OUTPUTS:
+            raise PlanError("GITHUB_OUTPUT file already defines an auto-plan output.")
+    return path
+
+
+def _write_outputs(path: Path, text: str) -> None:
+    """Appends every output in a single write so readers never see a partial set."""
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+
+
+def _run_auto(args: argparse.Namespace, env: Mapping[str, str]) -> None:
+    if args.command == "check-ci-promotion":
+        validate_ci_promotion(_read_json(args.run_json, "CI workflow run"),
+                              _read_json(args.pulls_json, "Associated pull request"),
+                              env.get("GITHUB_REPOSITORY", ""), env.get("CHECKOUT_SHA", ""),
+                              env.get("REMOTE_MAIN_SHA", ""))
+        print("CI promotion verified: main is a green CI push of a merged dev to main PR.")
+        return
+    # Output trust is settled before any CLI file is read so a failure can never leave
+    # a half-validated plan behind; outputs are written only after full validation.
+    output = _trusted_output_file(env.get("GITHUB_OUTPUT", "")) if args.command == "auto-plan" else None
+    baseline = _read_baseline(env)
+    manifest = read_manifest(args.migrations_dir)
+    history = parse_migration_list(_read(args.list_json))
+    if output is None:
+        verify_auto_applied(manifest, history, baseline)
+        print("Remote history equals the complete local manifest.")
+        return
+    files = check_auto_plan(manifest, history, baseline, _read(args.dry_run_log))
+    try:
+        _write_outputs(output, f"pending={'true' if files else 'false'}\npending_count={len(files)}\n")
+    except OSError:
+        raise PlanError("GITHUB_OUTPUT could not be written.") from None
+    if files:
+        print("Validated automatic plan; exactly these migrations will be applied:")
+        for name in files:
+            print(f"  {name}")
+    else:
+        print("Validated automatic plan; no migrations are pending.")
+
+
 def _run(args: argparse.Namespace, env: Mapping[str, str]) -> None:
-    if args.command == "check-inputs":
+    if args.command in ("check-ci-promotion", "auto-plan", "verify-auto-applied"):
+        _run_auto(args, env)
+    elif args.command == "check-inputs":
         validate_project_ref(env.get("INPUT_PROJECT_REF", ""))
         if not SHA_PATTERN.match(env.get("INPUT_MAIN_SHA", "")):
             raise PlanError("main_sha must be a full 40-character lowercase commit SHA.")
@@ -405,9 +489,7 @@ def _run(args: argparse.Namespace, env: Mapping[str, str]) -> None:
         print("Database URL targets the approved direct host with TLS.")
     else:
         expected = parse_expected_versions(env.get("EXPECTED_PENDING_VERSIONS", ""))
-        baseline = env.get("SUPABASE_APPROVED_BASELINE", "")
-        if not VERSION_PATTERN.match(baseline):
-            raise PlanError("SUPABASE_APPROVED_BASELINE is missing or invalid.")
+        baseline = _read_baseline(env)
         manifest = read_manifest(args.migrations_dir)
         history = parse_migration_list(_read(args.list_json))
         if args.command == "check-plan":
@@ -426,11 +508,14 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
     commands.add_parser("check-inputs")
     commands.add_parser("check-context")
     commands.add_parser("check-db-url")
-    for name in ("check-plan", "verify-applied"):
+    promotion = commands.add_parser("check-ci-promotion")
+    promotion.add_argument("--run-json", required=True)
+    promotion.add_argument("--pulls-json", required=True)
+    for name in ("check-plan", "verify-applied", "auto-plan", "verify-auto-applied"):
         command = commands.add_parser(name)
         command.add_argument("--migrations-dir", required=True)
         command.add_argument("--list-json", required=True)
-        if name == "check-plan":
+        if name in ("check-plan", "auto-plan"):
             command.add_argument("--dry-run-log", required=True)
     args = parser.parse_args(argv)
     try:
