@@ -19,6 +19,8 @@ PLANNER_SCRIPT = REPO_ROOT / "supabase" / "scripts" / "verify_migration_plan.py"
 PLANNER_JOB = "migration-planner-tests"
 PLANNER_COMMAND = 'python3 -m unittest discover -s supabase/tests -p "test_*.py"'
 MANUAL_SUBCOMMANDS = ("check-inputs", "check-context", "check-db-url", "check-plan", "verify-applied")
+AUTO_SUBCOMMANDS = ("check-ci-promotion", "check-main-head", "check-auto-config", "auto-plan",
+                    "verify-auto-applied")
 
 
 def job_block(text: str, name: str) -> str:
@@ -52,12 +54,18 @@ class CiPlannerJobTests(unittest.TestCase):
 
 
 class PlannerDocstringTests(unittest.TestCase):
-    def test_docstring_does_not_deny_manual_commands_still_used_by_the_deploy_workflow(self):
+    def test_docstring_matches_the_subcommands_the_deploy_workflow_uses(self):
         deploy = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-        if not any(f"verify_migration_plan.py {command}" in deploy for command in MANUAL_SUBCOMMANDS):
-            self.skipTest("deploy workflow no longer uses the manual subcommands")
-        docstring = ast.get_docstring(ast.parse(PLANNER_SCRIPT.read_text(encoding="utf-8"))) or ""
-        self.assertNotIn("not referenced by any workflow", " ".join(docstring.split()))
+        for command in AUTO_SUBCOMMANDS:
+            with self.subTest(command=command):
+                self.assertIn(f"verify_migration_plan.py {command}", deploy)
+        for command in MANUAL_SUBCOMMANDS:
+            with self.subTest(command=command):
+                self.assertNotIn(f"verify_migration_plan.py {command}", deploy)
+        docstring = " ".join((ast.get_docstring(ast.parse(PLANNER_SCRIPT.read_text(encoding="utf-8"))) or "").split())
+        self.assertIn("The last five back the automatic deploy workflow", docstring)
+        self.assertIn("The first five are not referenced by any workflow.", docstring)
+        self.assertNotIn("later change", docstring)
 
 
 if __name__ == "__main__":

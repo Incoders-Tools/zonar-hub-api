@@ -17,9 +17,8 @@ Subcommands:
   auto-plan            derive pending migrations and write GITHUB_OUTPUT values
   verify-auto-applied  confirm the remote history equals the full local manifest
 
-The first five back the current manually dispatched deploy workflow. The last
-five are the building blocks for an automatic CI-gated deploy; switching the
-workflow over to them, and retiring the manual subcommands, is a later change.
+The last five back the automatic deploy workflow, which runs after every green
+CI push to main. The first five are not referenced by any workflow.
 """
 
 from __future__ import annotations

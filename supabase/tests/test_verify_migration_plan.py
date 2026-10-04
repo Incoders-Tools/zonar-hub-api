@@ -1112,7 +1112,7 @@ class DeployWorkflowTests(unittest.TestCase):
         self.assertRegex(header, r"(?m)^env:\n(  .+\n)*  DO_NOT_TRACK: \"1\"$")
 
     def test_apply_step_timeout_leaves_room_for_history_verification(self):
-        job = int(re.search(r"name: Apply approved migrations\n.*?timeout-minutes: (\d+)",
+        job = int(re.search(r"name: Apply pending migrations\n.*?timeout-minutes: (\d+)",
                             self.text, re.S).group(1))
         apply = step_block(self.text, "Apply migrations")
         verify = step_block(self.text, "Verify remote migration history")
@@ -1332,7 +1332,15 @@ def job_blocks(text):
 
 GATE_JOB = "verify-promotion"
 GATE_STEP = "Verify main is a green CI push of a merged dev promotion"
-MANUAL_ONLY = "    if: github.event_name == 'workflow_dispatch'\n"
+DEPLOY_JOB = "deploy"
+CI_HEAD_CHECKOUT = ("        with:\n"
+                    "          ref: ${{ github.event.workflow_run.head_sha }}\n"
+                    "          persist-credentials: false\n")
+
+
+def checkout_block(job):
+    """Returns the `with:` block of the job's checkout step."""
+    return re.search(r"(?m)^      - uses: actions/checkout@v4\n((?:^        .*\n)+)", job).group(1)
 
 
 class PromotionGateWorkflowTests(unittest.TestCase):
@@ -1344,19 +1352,19 @@ class PromotionGateWorkflowTests(unittest.TestCase):
         cls.jobs = job_blocks(cls.text)
         cls.gate = cls.jobs[GATE_JOB]
 
-    def test_triggers_are_manual_dispatch_and_completed_main_ci_runs_only(self):
+    def test_only_completed_main_ci_runs_trigger_the_workflow(self):
         trigger = top_level_block(self.text, "on")
-        self.assertEqual(re.findall(r"(?m)^  (\w+):", trigger), ["workflow_dispatch", "workflow_run"])
+        self.assertEqual(re.findall(r"(?m)^  (\w+):", trigger), ["workflow_run"])
         workflow_run = trigger.split("  workflow_run:\n", 1)[1]
         self.assertEqual(re.findall(r"(?m)^    (\w+): (.*)$", workflow_run),
                          [("workflows", "[CI]"), ("types", "[completed]"), ("branches", "[main]")])
 
-    def test_manual_jobs_cannot_run_on_workflow_run_events(self):
-        self.assertEqual(list(self.jobs), ["preflight", "deploy", GATE_JOB])
-        for job in ("preflight", "deploy"):
-            with self.subTest(job=job):
-                self.assertEqual(re.findall(r"(?m)^    if: .*\n", self.jobs[job]), [MANUAL_ONLY])
-        self.assertRegex(self.jobs["deploy"], r"(?m)^    needs: preflight$")
+    def test_manual_dispatch_and_legacy_manual_jobs_are_gone(self):
+        self.assertEqual(list(self.jobs), [GATE_JOB, DEPLOY_JOB])
+        for forbidden in ("workflow_dispatch", "inputs.", "INPUT_", "EXPECTED_PENDING_VERSIONS", "preflight",
+                          "check-inputs", "check-context", "check-plan", "verify-applied", "check-db-url"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.text)
 
     def test_gate_runs_only_for_successful_same_repository_main_push_ci(self):
         condition = re.search(r"(?m)^    if: >-\n((?:^      .*\n)+)", self.gate).group(1)
@@ -1382,16 +1390,12 @@ class PromotionGateWorkflowTests(unittest.TestCase):
                           "supabase-cli", "needs:", "auto-plan", "GITHUB_OUTPUT", "GITHUB_ENV"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, self.gate)
-        for job, body in self.jobs.items():
-            with self.subTest(job=job):
-                self.assertNotIn(GATE_JOB, re.findall(r"(?m)^    needs: (.*)$", body))
 
     def test_gate_checks_out_the_exact_ci_head_without_credentials(self):
-        checkout = re.search(r"(?m)^      - uses: actions/checkout@v4\n((?:^        .*\n)+)", self.gate).group(1)
-        self.assertEqual(checkout, "        with:\n"
-                                   "          ref: ${{ github.event.workflow_run.head_sha }}\n"
-                                   "          persist-credentials: false\n")
-        self.assertEqual(len(re.findall(r"\bref:", self.text)), 1)
+        self.assertEqual(checkout_block(self.gate), CI_HEAD_CHECKOUT)
+        # Only the gate and the deploy job check out code, both at the CI head SHA.
+        self.assertEqual(re.findall(r"\bref:.*", self.text),
+                         ["ref: ${{ github.event.workflow_run.head_sha }}"] * 2)
         for forbidden in ("pull_request", "refs/pull/", "head_repository.clone", "repository:",
                           "git fetch", "git clone", "--paginate"):
             with self.subTest(forbidden=forbidden):
@@ -1414,14 +1418,14 @@ class PromotionGateWorkflowTests(unittest.TestCase):
         self.assertNotIn("${{", run_script(step))
         self.assertEqual(re.findall(r"\$\{\{[^}]*\}\}", step), ["${{ github.token }}"])
 
-    def test_gate_never_displaces_a_queued_manual_deployment(self):
-        group = re.search(r"(?m)^  group: >-\n((?:^    .*\n)+)", top_level_block(self.text, "concurrency") + "\n")
-        self.assertIsNotNone(group)
-        expression = " ".join(group.group(1).split())
-        self.assertEqual(expression,
-                         "${{ github.event_name == 'workflow_dispatch' && 'supabase-production-migrations' "
-                         "|| format('supabase-ci-promotion-{0}', github.event.workflow_run.head_sha) }}")
-        self.assertRegex(top_level_block(self.text, "concurrency"), r"(?m)^  cancel-in-progress: false$")
+    def test_only_gated_deployments_join_the_serialized_concurrency_group(self):
+        # A workflow-level group would let ungated runs (failed CI, PR runs) displace
+        # a queued deployment; the group is entered only after the gate passes.
+        self.assertNotRegex(self.text, r"(?m)^concurrency:")
+        self.assertNotIn("concurrency:", self.gate)
+        self.assertIn("    concurrency:\n"
+                      "      group: supabase-production-migrations\n"
+                      "      cancel-in-progress: false\n", self.jobs[DEPLOY_JOB])
 
 
 def _posix(path):
@@ -1564,6 +1568,102 @@ class PromotionGateScriptTests(unittest.TestCase):
         self.assertNotIn("stop-commands", output)
         self.assertNotIn("pwned", output)
         self.assertFalse((REPO_ROOT / "pwned").exists())
+
+
+REBIND_AFTER_GATE = "Re-bind run to current main head after gate"
+CONFIG_STEP = "Validate environment configuration"
+HISTORY_STEP = "Read remote migration history"
+DRY_RUN_STEP = "Dry run pending migrations"
+PLAN_STEP = "Derive automatic plan"
+REBIND_BEFORE_APPLY = "Re-bind run to current main head before applying"
+APPLY_STEP = "Apply migrations"
+VERIFY_STEP = "Verify remote migration history"
+DEPLOY_STEPS = [REBIND_AFTER_GATE, CONFIG_STEP, "Install verified Supabase CLI", "Verify Supabase CLI version",
+                HISTORY_STEP, DRY_RUN_STEP, PLAN_STEP, REBIND_BEFORE_APPLY, APPLY_STEP, VERIFY_STEP]
+# The only steps that may receive the database URL secret.
+DB_STEPS = (CONFIG_STEP, HISTORY_STEP, DRY_RUN_STEP, APPLY_STEP, VERIFY_STEP)
+DB_SECRET_ENV = "          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}\n"
+PENDING_ONLY = ["steps.plan.outputs.pending == 'true'"]
+
+
+class AutoDeployWorkflowTests(unittest.TestCase):
+    """Static assertions on the automatic CI-gated deploy job; no network or secrets."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = strip_comments(DEPLOY_WORKFLOW.read_text(encoding="utf-8"))
+        cls.deploy = job_blocks(cls.text)[DEPLOY_JOB]
+        cls.header = cls.deploy.split("    steps:\n", 1)[0]
+
+    def test_deploy_needs_the_gate_and_runs_in_the_protected_environment(self):
+        self.assertEqual(re.findall(r"(?m)^    needs: (.*)$", self.header), [GATE_JOB])
+        self.assertEqual(re.findall(r"(?m)^    environment: (.*)$", self.header), ["supabase-production"])
+        # A job-level `if:` could add always() and run after a failed or skipped gate.
+        self.assertNotRegex(self.header, r"(?m)^    if:")
+        for forbidden in ("always()", "failure()", "continue-on-error", "permissions:"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.deploy)
+
+    def test_job_reads_only_the_approved_environment_variables(self):
+        env = re.search(r"(?m)^    env:\n((?:^      .*\n)+)", self.header).group(1)
+        self.assertEqual(env, "      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}\n"
+                              "      SUPABASE_APPROVED_BASELINE: ${{ vars.SUPABASE_APPROVED_BASELINE }}\n")
+        self.assertEqual(re.findall(r"vars\.\w+", self.text),
+                         ["vars.SUPABASE_PROJECT_REF", "vars.SUPABASE_APPROVED_BASELINE"])
+
+    def test_steps_check_out_the_ci_head_and_run_in_fail_closed_order(self):
+        self.assertEqual(checkout_block(self.deploy), CI_HEAD_CHECKOUT)
+        self.assertLess(self.deploy.index("actions/checkout@v4"), self.deploy.index("      - name: "))
+        self.assertEqual(re.findall(r"(?m)^      - name: (.*)$", self.deploy), DEPLOY_STEPS)
+
+    def test_database_secret_reaches_only_the_exact_database_steps(self):
+        self.assertEqual(re.findall(r"secrets\.\w+", self.text), ["secrets.SUPABASE_DB_URL"] * len(DB_STEPS))
+        self.assertNotIn("secrets.", self.header)
+        for name in DEPLOY_STEPS:
+            step = step_block(self.deploy, name)
+            with self.subTest(step=name):
+                if name in DB_STEPS:
+                    env = re.search(r"(?m)^        env:\n((?:^          .*\n)+)", step).group(1)
+                    self.assertIn(DB_SECRET_ENV, env)
+                else:
+                    self.assertNotIn("secrets.", step)
+                    self.assertNotIn("SUPABASE_DB_URL", step)
+
+    def test_push_and_postcheck_run_only_for_a_pending_plan(self):
+        conditions = {name: re.findall(r"(?m)^        if: (.*)$", step_block(self.deploy, name))
+                      for name in DEPLOY_STEPS}
+        self.assertEqual(conditions, {**{name: [] for name in DEPLOY_STEPS},
+                                      REBIND_BEFORE_APPLY: PENDING_ONLY, APPLY_STEP: PENDING_ONLY,
+                                      VERIFY_STEP: ["${{ !cancelled() && steps.push.outcome != 'skipped' }}"]})
+        self.assertRegex(step_block(self.deploy, PLAN_STEP), r"(?m)^        id: plan$")
+        self.assertRegex(step_block(self.deploy, APPLY_STEP), r"(?m)^        id: push$")
+        self.assertEqual(len(re.findall(r"\bsupabase db push --yes\b", self.text)), 1)
+        self.assertEqual(len(re.findall(r"\bsupabase db push\b", self.text)), 2)
+
+    def test_plan_config_and_postcheck_use_the_automatic_planner_commands(self):
+        plan = run_script(step_block(self.deploy, PLAN_STEP))
+        for fragment in ("verify_migration_plan.py auto-plan", "--migrations-dir supabase/migrations",
+                         '--list-json "$RUNNER_TEMP/history-before.json"',
+                         '--dry-run-log "$RUNNER_TEMP/dry-run.log"'):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, plan)
+        self.assertIn("verify_migration_plan.py verify-auto-applied",
+                      run_script(step_block(self.deploy, VERIFY_STEP)))
+        self.assertIn("verify_migration_plan.py check-auto-config",
+                      run_script(step_block(self.deploy, CONFIG_STEP)))
+
+    def test_rebind_steps_are_identical_read_only_and_take_event_data_from_a_file(self):
+        steps = [step_block(self.deploy, name) for name in (REBIND_AFTER_GATE, REBIND_BEFORE_APPLY)]
+        scripts = [run_script(step) for step in steps]
+        self.assertEqual(scripts[0], scripts[1])
+        calls = re.findall(r"gh api[^\n]*", scripts[0])
+        self.assertEqual(len(calls), 1)
+        self.assertIn('gh api --method GET "repos/${GITHUB_REPOSITORY}/git/ref/heads/main"', calls[0])
+        self.assertNotRegex(calls[0], r"\s(-f|-F|--field|--raw-field|--input|-X)\b")
+        self.assertIn('check-main-head --event-json "$GITHUB_EVENT_PATH"', scripts[0])
+        for step, script in zip(steps, scripts):
+            self.assertNotIn("${{", script)
+            self.assertEqual(re.findall(r"\$\{\{[^}]*\}\}", step), ["${{ github.token }}"])
 
 
 if __name__ == "__main__":
