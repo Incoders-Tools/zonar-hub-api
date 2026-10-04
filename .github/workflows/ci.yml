@@ -77,3 +77,17 @@ jobs:
 
       - name: Migrations and SQL regression tests (disposable PostgreSQL 17)
         run: bash supabase/tests/run_complex_courts_atomic.sh
+
+  migration-planner-tests:
+    # The deploy workflow only runs after this whole CI run succeeds on main, so
+    # the migration planner and deploy workflow checks must pass for the exact
+    # commit that is deployed. Stdlib only, fake CLIs, no network or secrets.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Migration planner and deploy workflow tests
+        run: python3 -m unittest discover -s supabase/tests -p "test_*.py"

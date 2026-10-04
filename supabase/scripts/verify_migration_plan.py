@@ -12,8 +12,14 @@ Subcommands:
   check-plan      compare manifest, remote history, dry run and approved list
   verify-applied  confirm the remote history after `supabase db push`
   check-ci-promotion   prove main is a green CI run of a merged dev to main PR
+  check-main-head      re-bind the CI head SHA to the checkout and current main head
+  check-auto-config    validate project ref, baseline and SUPABASE_DB_URL (no inputs)
   auto-plan            derive pending migrations and write GITHUB_OUTPUT values
   verify-auto-applied  confirm the remote history equals the full local manifest
+
+The first five back the current manually dispatched deploy workflow. The last
+five are the building blocks for an automatic CI-gated deploy; switching the
+workflow over to them, and retiring the manual subcommands, is a later change.
 """
 
 from __future__ import annotations
@@ -318,6 +324,27 @@ def _text(document: object, *path: str) -> str:
     return value
 
 
+def _bind_to_main_head(sha: str, checkout_sha: str, remote_main_sha: str) -> None:
+    """Requires a well-formed CI head SHA that is checked out and still the head of main."""
+    if not SHA_PATTERN.fullmatch(sha):
+        raise PlanError("CI workflow run head SHA is malformed.")
+    if checkout_sha != sha:
+        raise PlanError("checked out commit does not match the CI head SHA.")
+    if remote_main_sha != sha:
+        raise PlanError("CI head SHA is stale: refs/heads/main has moved.")
+
+
+def validate_main_head(event: object, checkout_sha: str, remote_main_sha: str) -> str:
+    """Returns the CI head SHA of a `workflow_run` event while it is still the head of main.
+
+    Deploy steps call this after the promotion gate and again right before applying, so
+    a merge that lands on main in between stops the run. Messages never echo values.
+    """
+    sha = _text(event, "workflow_run", "head_sha")
+    _bind_to_main_head(sha, checkout_sha, remote_main_sha)
+    return sha
+
+
 def validate_ci_promotion(
     run: object,
     pulls: object,
@@ -354,12 +381,7 @@ def validate_ci_promotion(
     if _field(run, "conclusion") != "success":
         raise PlanError("CI workflow run is not successful.")
     sha = _text(run, "head_sha")
-    if not SHA_PATTERN.match(sha):
-        raise PlanError("CI workflow run head SHA is malformed.")
-    if checkout_sha != sha:
-        raise PlanError("checked out commit does not match the CI head SHA.")
-    if remote_main_sha != sha:
-        raise PlanError("CI head SHA is stale: refs/heads/main has moved.")
+    _bind_to_main_head(sha, checkout_sha, remote_main_sha)
 
     if not isinstance(pulls, list):
         raise PlanError("Associated pull request list is malformed.")
@@ -445,6 +467,16 @@ def _run_auto(args: argparse.Namespace, env: Mapping[str, str]) -> None:
                               env.get("REMOTE_MAIN_SHA", ""))
         print("CI promotion verified: main is a green CI push of a merged dev to main PR.")
         return
+    if args.command == "check-main-head":
+        validate_main_head(_read_json(args.event_json, "Workflow event"),
+                           env.get("CHECKOUT_SHA", ""), env.get("REMOTE_MAIN_SHA", ""))
+        print("Run is bound to the CI head SHA, which is the current head of refs/heads/main.")
+        return
+    if args.command == "check-auto-config":
+        _read_baseline(env)
+        validate_db_url(env.get("SUPABASE_DB_URL", ""), env.get("SUPABASE_PROJECT_REF", ""))
+        print("Environment configuration valid; database URL targets the approved direct host with TLS.")
+        return
     # Output trust is settled before any CLI file is read so a failure can never leave
     # a half-validated plan behind; outputs are written only after full validation.
     output = _trusted_output_file(env.get("GITHUB_OUTPUT", "")) if args.command == "auto-plan" else None
@@ -469,7 +501,8 @@ def _run_auto(args: argparse.Namespace, env: Mapping[str, str]) -> None:
 
 
 def _run(args: argparse.Namespace, env: Mapping[str, str]) -> None:
-    if args.command in ("check-ci-promotion", "auto-plan", "verify-auto-applied"):
+    if args.command in ("check-ci-promotion", "check-main-head", "check-auto-config", "auto-plan",
+                        "verify-auto-applied"):
         _run_auto(args, env)
     elif args.command == "check-inputs":
         validate_project_ref(env.get("INPUT_PROJECT_REF", ""))
@@ -511,6 +544,8 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
     promotion = commands.add_parser("check-ci-promotion")
     promotion.add_argument("--run-json", required=True)
     promotion.add_argument("--pulls-json", required=True)
+    commands.add_parser("check-main-head").add_argument("--event-json", required=True)
+    commands.add_parser("check-auto-config")
     for name in ("check-plan", "verify-applied", "auto-plan", "verify-auto-applied"):
         command = commands.add_parser(name)
         command.add_argument("--migrations-dir", required=True)

@@ -977,6 +977,96 @@ class AutoCommandLineTests(unittest.TestCase):
         code, output = self.verify(rows(VERSIONS, VERSIONS), env={"SUPABASE_APPROVED_BASELINE": BASELINE})
         self.assertEqual(code, 0, output)
 
+    # check-auto-config ----------------------------------------------------
+
+    def config_env(self, **overrides):
+        env = {"SUPABASE_DB_URL": GOOD_URL, "SUPABASE_PROJECT_REF": REF, "SUPABASE_APPROVED_BASELINE": BASELINE}
+        env.update(overrides)
+        return {key: value for key, value in env.items() if value is not None}
+
+    def test_check_auto_config_accepts_environment_without_dispatch_inputs(self):
+        code, output = self.run_main(["check-auto-config"], self.config_env())
+        self.assertEqual(code, 0, output)
+        self.assertIn("direct host with TLS", output)
+        self.assertNotIn(SECRET, output)
+        # A stale manual input can neither satisfy nor break the automatic route.
+        code, output = self.run_main(["check-auto-config"], self.config_env(INPUT_PROJECT_REF=OTHER_REF))
+        self.assertEqual(code, 0, output)
+
+    def test_check_auto_config_fails_closed_on_missing_or_invalid_configuration(self):
+        cases = (
+            ({"SUPABASE_PROJECT_REF": None}, "project ref"),
+            ({"SUPABASE_PROJECT_REF": ""}, "project ref"),
+            ({"SUPABASE_PROJECT_REF": "evil.example/"}, "project ref"),
+            ({"SUPABASE_PROJECT_REF": OTHER_REF}, "host"),
+            ({"SUPABASE_APPROVED_BASELINE": None}, "BASELINE"),
+            ({"SUPABASE_APPROVED_BASELINE": "2026; drop"}, "BASELINE"),
+            ({"SUPABASE_DB_URL": None}, "missing"),
+            ({"SUPABASE_DB_URL": GOOD_URL.replace("sslmode=require", "sslmode=disable")}, "sslmode"),
+            ({"SUPABASE_DB_URL": GOOD_URL.replace(".supabase.co:", ".supabase.co.evil.example:")}, "host"),
+            ({"SUPABASE_DB_URL": GOOD_URL + "&host=evil.example"}, "query"),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=overrides):
+                code, output = self.run_main(["check-auto-config"], self.config_env(**overrides))
+                self.assertEqual(code, 1)
+                self.assertIn("::error::", output)
+                self.assertIn(message, output)
+                self.assertNotIn(SECRET, output)
+
+    # check-main-head ------------------------------------------------------
+
+    def main_head(self, event=None, event_text=None, **overrides):
+        text = json.dumps({"workflow_run": ci_run()} if event is None else event) if event_text is None else event_text
+        env = {"CHECKOUT_SHA": SHA, "REMOTE_MAIN_SHA": SHA}
+        env.update(overrides)
+        return self.run_main(["check-main-head", "--event-json", self.write("event.json", text)],
+                             {key: value for key, value in env.items() if value is not None})
+
+    def test_check_main_head_accepts_ci_head_that_is_checked_out_and_still_main(self):
+        code, output = self.main_head()
+        self.assertEqual(code, 0, output)
+        self.assertIn("current head of refs/heads/main", output)
+        self.assertEqual(self.outputs(), "")
+
+    def test_check_main_head_fails_closed_when_main_moved_or_checkout_differs(self):
+        cases = (
+            ({"REMOTE_MAIN_SHA": OTHER_SHA}, "stale"),
+            ({"REMOTE_MAIN_SHA": None}, "stale"),
+            ({"CHECKOUT_SHA": OTHER_SHA}, "checked out"),
+            ({"CHECKOUT_SHA": None}, "checked out"),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=overrides):
+                code, output = self.main_head(**overrides)
+                self.assertEqual(code, 1)
+                self.assertIn(message, output)
+
+    def test_check_main_head_rejects_malformed_events_without_echoing_them(self):
+        missing = ci_run()
+        del missing["head_sha"]
+        events = ({"workflow_run": ci_run(head_sha=SHA.upper())}, {"workflow_run": ci_run(head_sha=SHA[:7])},
+                  {"workflow_run": ci_run(head_sha=SHA + "\n")}, {"workflow_run": ci_run(head_sha=HOSTILE)},
+                  {"workflow_run": ci_run(head_sha=1)}, {"workflow_run": missing}, {"workflow_run": None},
+                  {"workflow_run": [ci_run()]}, {}, [HOSTILE])
+        for event in events:
+            with self.subTest(event=event):
+                code, output = self.main_head(event=event, CHECKOUT_SHA=SHA + "\n", REMOTE_MAIN_SHA=SHA + "\n")
+                self.assertEqual(code, 1)
+                self.assertIn("::error::", output)
+                self.assertNotIn("pwned", output)
+        code, output = self.main_head(event_text="not json " + HOSTILE)
+        self.assertEqual(code, 1)
+        self.assertIn("not valid JSON", output)
+        self.assertNotIn("pwned", output)
+        code, output = self.run_main(["check-main-head", "--event-json", str(Path(self.folder, "absent.json"))],
+                                     {"CHECKOUT_SHA": SHA, "REMOTE_MAIN_SHA": SHA})
+        self.assertEqual(code, 1)
+        self.assertIn("missing or unreadable", output)
+
+    def test_validate_main_head_returns_the_bound_sha(self):
+        self.assertEqual(vmp.validate_main_head({"workflow_run": ci_run()}, SHA, SHA), SHA)
+
 
 def strip_comments(text):
     """Drops full-line YAML comments so prose cannot satisfy or trip a check."""
