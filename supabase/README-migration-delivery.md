@@ -1,60 +1,96 @@
 # Production migration delivery
 
-The intended repository delivery path for migrations in `supabase/migrations` is
-`.github/workflows/deploy-supabase-migrations.yml`. This cannot prevent database
-owners or external integrations from applying migrations by another route; the
-operator must disable competing automation as described below. Nothing in this
-repository applies migrations automatically. Every database operation needs:
+Migrations in `supabase/migrations` reach the current production Supabase
+project only through `.github/workflows/deploy-supabase-migrations.yml`, and
+only automatically. This cannot prevent database owners or external
+integrations from applying migrations by another route; the operator must
+disable competing automation as described below.
 
-1. the change merged to `main`,
-2. a manual `workflow_dispatch` from `main` with exact inputs, and
-3. reviewer approval of the protected `supabase-production` environment.
+CI runs on pull requests and pushes never touch a hosted database. `ci.yml`
+checks migrations in disposable PostgreSQL 17 and runs the planner and workflow
+tests without secrets. A subsequent, separate deployment run may connect to
+the current Supabase project after a qualifying `main` push.
 
-Pull requests and pushes never touch a hosted database. `ci.yml` runs every
-migration against a disposable PostgreSQL 17 container and has no secrets.
+## How a deployment happens
 
-### Interim: CI promotion gate (does not deploy)
+1. Work lands on `dev` freely; `dev` is not protected and never deploys.
+2. To release, open a pull request from `dev` to `main` in this repository and
+   merge it once CI is green. No issue reference and no reviewer approval are
+   required by this workflow.
+3. The merge pushes to `main`, which runs `CI`. When that run completes, the
+   deploy workflow starts from the `workflow_run` event. There is no manual
+   dispatch and no input to type.
+4. `verify-promotion` (no secrets, no environment) checks that the CI run is a
+   green `push` run on `main` in this repository, that `main` still points at
+   the CI head SHA, and that this commit is the merge commit of exactly one
+   merged same-repository `dev` to `main` pull request. This is only a trusted
+   promotion when `main` protection also prevents direct pushes and bypasses.
+   PR-only, failed and unfinished CI runs skip the gate; invalid or ambiguous
+   qualifying runs fail it. Neither route reaches deployment.
+5. `deploy` runs only when the gate succeeded. It enters the
+   `supabase-production` environment, checks out the exact CI head SHA without
+   persisted credentials and applies only the migrations still pending on the
+   current project.
 
-A completed `CI` run on `main` also triggers the workflow's `verify-promotion`
-job. It checks out the exact CI head SHA without persisted credentials, reads
-the run from the event, and calls `check-ci-promotion` with read-only
-`gh api` data (current `main` head and one page of associated PRs). It fails
-closed when the run is not a green push on `main`, `main` has moved, the commit
-has no merged same-repository `dev` to `main` PR, the SHA is malformed or the PR
-page is full. Its token can only read contents and pull requests; it has no
-environment, secrets or database URL, and no job depends on it, so it applies
-nothing. The manual `preflight` and `deploy` jobs run only on
-`workflow_dispatch` and remain the only delivery path for now. CI-run gates use
-a per-commit concurrency group and never displace a queued manual deployment.
+When remote history already contains the full local manifest, the plan reports
+`pending=false` and skips `db push` and the post-check. The run still reads the
+remote database and can fail on configuration, connectivity or history errors.
+A promotion without new migration files may also apply migrations left pending
+by an earlier failed run.
+
+## Deploy job steps
+
+| Step | Database secret | What it does |
+|------|-----------------|--------------|
+| Re-bind run to current main head after gate | no | `check-main-head`: CI head SHA from the event file equals the checkout and the current `main` head |
+| Validate environment configuration | yes | rejects a linked project (`supabase/.temp`); `check-auto-config` validates `SUPABASE_PROJECT_REF`, `SUPABASE_APPROVED_BASELINE` and `SUPABASE_DB_URL` |
+| Install verified Supabase CLI / version check | no | pinned 2.109.0 archive, SHA-256 checked before extraction |
+| Read remote migration history | yes | `supabase migration list`; must exit 0 |
+| Dry run pending migrations | yes | `supabase db push --dry-run`; must exit 0 |
+| Derive automatic plan | no | `auto-plan` writes `pending` and `pending_count` to `GITHUB_OUTPUT` only after full validation |
+| Re-bind run to current main head before applying | no | same check as above, only when `pending == 'true'` |
+| Apply migrations | yes | `supabase db push --yes` exactly once, only when `pending == 'true'` |
+| Verify remote migration history | yes | runs whenever the push step ran, including after a failed push, unless the run was cancelled; `verify-auto-applied` requires the remote history to equal the full local manifest |
+
+The secret is mapped only into those five steps. Event data reaches scripts
+through the event file, never by expression interpolation, and the GitHub token
+only has `contents: read` (the gate also has `pull-requests: read`).
 
 ## Guarantees
 
-The workflow stops before connecting if any check fails.
+Preflight failures stop before applying migrations. A connection or post-push
+failure can occur after the database has been contacted; follow the failure
+procedure below before retrying.
 
 | Check | Enforced by |
 |-------|-------------|
-| Run is from `refs/heads/main` and `main_sha` is the current head | `check-context`, before approval, after approval, and again right before `db push` |
-| `project_ref` input equals environment `SUPABASE_PROJECT_REF` | `check-db-url` |
-| `SUPABASE_DB_URL` targets `db.<ref>.supabase.co:5432`, one host, user `postgres` with a password, database `/postgres`, `sslmode` of `require`, `verify-ca` or `verify-full`, no host/port overrides in the query | `check-db-url` |
+| Main is a green CI push of a merged same-repository `dev` to `main` PR | `check-ci-promotion` in `verify-promotion` |
+| The checkout and current `main` head equal the CI head SHA, after the gate and again right before `db push` | `check-main-head` |
+| `SUPABASE_PROJECT_REF` is a 20-character project ref and `SUPABASE_APPROVED_BASELINE` is a version | `check-auto-config` |
+| `SUPABASE_DB_URL` targets `db.<ref>.supabase.co:5432`, one host, user `postgres` with a password, database `/postgres`, `sslmode` of `require`, `verify-ca` or `verify-full`, no host/port overrides in the query | `check-auto-config` |
 | Supabase CLI is exactly 2.109.0 and its archive matches the pinned SHA-256 digest before extraction | "Install verified Supabase CLI" plus a version check |
-| No other workflow pushes migrations, links a project or reads the database secret | `DeployWorkflowTests` in the preflight unit tests |
-| Local versions reported by the CLI equal the checked-out manifest | `check-plan` |
-| Remote history is non-empty, contains `SUPABASE_APPROVED_BASELINE`, and is a contiguous prefix of the manifest (no remote-only, diverging or skipped versions) | `check-plan` |
-| Pending versions equal `expected_pending_versions` exactly, in order; an empty list stops the run | `check-plan` |
-| `db push --dry-run` lists exactly those files | `check-plan` |
-| After `db push --yes`, remote history ends at the last approved version | `verify-applied` |
+| No other workflow pushes migrations, links a project or reads the database secret | `DeployWorkflowTests` |
+| Local versions reported by the CLI equal the checked-out manifest | `auto-plan` |
+| Remote history is non-empty, contains `SUPABASE_APPROVED_BASELINE`, and is a contiguous prefix of the manifest (no remote-only, diverging or skipped versions) | `auto-plan` |
+| Pending migrations are exactly the manifest suffix missing remotely, and the dry run lists exactly those files in order; with nothing pending the dry run must be the exact "up to date" signal | `auto-plan` |
+| After `db push --yes`, the remote history equals the complete local manifest | `verify-auto-applied` |
+| The planner and workflow tests passed for the deployed commit | `migration-planner-tests` job in `ci.yml`, part of the green CI run the gate requires |
 
-The workflow never uses `--include-all`, `migration repair`, `--linked` or
-`supabase link`. It runs `db push --yes` at most once per dispatch.
+The workflow never uses `--include-all`, `migration repair`, `--linked`,
+`supabase link` or seeding. It runs `db push --yes` at most once per run attempt.
 
 CLI output can contain connection details, so it is written to runner temp files
 and never printed or uploaded as an artifact. On a CLI failure the log shows a
 generic "output withheld" error only; the files are discarded with the runner.
 To diagnose, reproduce the command from a trusted workstation or against a
-disposable database. The preflight script never prints the database URL.
+disposable database. The planner script never prints the database URL.
 
 The workflow sets `SUPABASE_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` for
 every job to opt out of CLI telemetry.
+
+The manual subcommands of `verify_migration_plan.py` (`check-inputs`,
+`check-context`, `check-db-url`, `check-plan`, `verify-applied`) are kept for
+backward compatibility; no workflow references them.
 
 ### Supabase CLI supply chain
 
@@ -73,23 +109,28 @@ together in one reviewed pull request, taking the digest from the new release's
 Update the expected version in "Verify Supabase CLI version" and the
 `DeployWorkflowTests` constants in the same change.
 
-## Operator setup (once)
+## Operator setup (once, before the first merge to main)
 
-These settings live in GitHub, not in this repository. The workflow cannot
-enforce them, which is why manual dispatch is also required.
+These settings live in GitHub and Supabase, not in this repository. The
+workflow cannot enforce them, and the automatic route is only safe with them.
 
-1. Protect `main`: require pull requests and passing CI, and block force pushes.
-2. Create the environment `supabase-production` with:
-   - **Required reviewers**: at least one person other than the dispatcher; enable
-     "Prevent self-review".
-   - **Deployment branches**: selected branches, `main` only.
+1. **Protect `main` (mandatory).** Require a pull request before merging,
+   require the CI status checks (including `migration-planner-tests`) and the
+   `promotion-policy` check, block force pushes and deletions, and do not allow
+   bypassing these rules. Without this, a fast-forward push of an open `dev`
+   PR's head to `main` can be associated with that PR as merged and pass the
+   gate.
+2. **Restrict the environment (mandatory).** Configure `supabase-production`
+   with **Deployment branches**: selected branches, `main` only. Verify that no
+   required reviewers remain; adding one pauses deployment for approval. Apply
+   any GitHub setting change only with its own authorization.
 3. Add to that environment only:
    - Secret `SUPABASE_DB_URL`: the direct connection string, for example
      `postgresql://postgres:<percent-encoded-password>@db.<ref>.supabase.co:5432/postgres?sslmode=require`.
    - Variable `SUPABASE_PROJECT_REF`: the 20-character project ref.
    - Variable `SUPABASE_APPROVED_BASELINE`: see the next section.
-4. Disable every other path that can change the production schema, so a merge to
-   `main` cannot bypass the approval gate:
+   A missing or invalid value fails the run before the CLI is installed.
+4. Disable every other path that can change the production schema:
    - In the Supabase dashboard, under the project's GitHub integration
      (Project Settings → Integrations → GitHub), disconnect the repository, or
      at least turn off automatic deployment of migrations to production and
@@ -98,21 +139,24 @@ enforce them, which is why manual dispatch is also required.
    - Do not enable Supabase Branching for the production project while this
      workflow is the delivery path.
    - Do not store a Supabase personal access token (`SUPABASE_ACCESS_TOKEN`) in
-     GitHub; the preflight tests reject workflows that reference it or that run
-     `supabase db push` or `supabase link`.
+     GitHub; the workflow tests reject **other** workflows that reference it or
+     that run `supabase db push` or `supabase link`.
    - Recheck these settings whenever project owners change.
-5. Do not define `SUPABASE_DB_URL`, `SUPABASE_PROJECT_REF` or
-   `SUPABASE_APPROVED_BASELINE` at repository or organization level. GitHub falls
+5. **Keep credentials environment-scoped (mandatory).** Do not define
+   `SUPABASE_DB_URL`, `SUPABASE_PROJECT_REF` or `SUPABASE_APPROVED_BASELINE` at
+   repository or organization level. GitHub falls
    back to those scopes when the environment value is missing, so a stray
    repository secret would bypass the environment boundary.
 6. The direct host `db.<ref>.supabase.co` resolves to IPv6 unless the project has
    the IPv4 add-on. GitHub-hosted runners have no IPv6 egress, so enable the IPv4
-   add-on (or use a self-hosted runner with IPv6) before the first run.
+   add-on (or use a self-hosted runner with IPv6) before the first merge to
+   `main`; otherwise the history step fails and nothing is applied.
 
 ## Baseline bootstrap (once, outside the workflow)
 
-The workflow refuses to run while the remote history table is empty. If
-production schema was created by hand, record the already-applied migrations
+The workflow reads remote history but refuses to apply migrations while its
+table is empty. If production schema was created by hand, record the
+already-applied migrations
 once, with a reviewed and recorded change:
 
 1. Confirm that production schema matches the migrations up to the chosen
@@ -125,66 +169,59 @@ once, with a reviewed and recorded change:
 4. Set `SUPABASE_APPROVED_BASELINE` to that last version.
 
 Never run `migration repair` from the workflow. Update the baseline variable
-only through the same reviewed process.
+only through the same reviewed process. Every migration after the baseline that
+is on `main` is applied by the next green promotion.
 
-## Deploying
+## Concurrency and retry
 
-1. Merge the migration to `main` and wait for CI.
-2. List pending versions locally: they are the migration filenames after the
-   last remote version, in filename order.
-3. Run **Deploy Supabase migrations** from `main` with:
-   - `main_sha`: full SHA of the current `main` head.
-   - `project_ref`: the production project ref.
-   - `expected_pending_versions`: exact list, for example
-     `20261001010000,20261002100000`.
-4. The reviewer checks the preflight job output and the inputs, then approves.
-5. The deploy job prints the validated plan before applying it.
+Only deploy jobs that passed the gate join the `supabase-production-migrations`
+concurrency group, with `cancel-in-progress: false`. A running deployment is
+never cancelled. A newer gated run replaces a deploy job that is still queued;
+the replaced run shows as cancelled, and the newer run applies everything
+pending for the newer `main` head.
 
-## Retry and concurrency
+There is no manual retry input. To retry after fixing the cause (for example an
+unreachable host), re-run the failed workflow run while its CI head is still the
+`main` head; once `main` has moved, the re-bind checks reject it and the next
+promotion deploys instead. If a previous run applied some migrations, the next
+plan derives the shorter pending list from the remote history.
 
-All runs share one static concurrency group with `cancel-in-progress: false`.
-A running deployment is never cancelled, but a newer dispatch replaces a run that
-is still queued; the replaced run shows as cancelled.
-
-To retry, dispatch again with the current `main` head SHA and the current pending
-list. Re-running an old run, or dispatching with an old SHA after `main` moved,
-fails at `check-context` before the database is touched. If a previous run
-applied some migrations, the pending list shrinks; the dry-run check rejects the
-old list.
-
-## Failure and rollback
+## Failure and roll-forward
 
 Migrations are applied file by file, so a failure can leave earlier files of
 the same run applied while later ones are not.
 
 1. Read the "Verify remote migration history" step: it reports whether the
-   approved history was reached when a push failed or hit its 20-minute step
-   timeout. For details, inspect the version-only history from a trusted
-   workstation; runner CLI output is deliberately withheld.
+   remote history reached the full manifest when a push failed or hit its
+   20-minute step timeout. For details, inspect the version-only history from a
+   trusted workstation; runner CLI output is deliberately withheld.
 2. If the run was cancelled, or the whole job timed out, that step does not
    run and the remote state is unknown. A killed CLI may leave a statement
-   running on the server until the connection is dropped. Before any new
-   dispatch:
+   running on the server until the connection is dropped. Before the next
+   promotion:
    - check for active sessions from the CLI with read-only access (for example
      `pg_stat_activity`) and wait for them to end;
    - read `supabase migration list --db-url "$SUPABASE_DB_URL"` from a trusted
      workstation, without printing the URL;
-   - compare the remote history with the approved list; a migration missing
+   - compare the remote history with the local manifest; a migration missing
      from the history may still have partially applied if it is not
      transactional.
    Do not cancel a run while "Apply migrations" is in progress.
-3. Do not rerun the same inputs blindly. Diagnose with a disposable database
-   built from the same migrations, or with read-only access to production.
-4. Roll forward: merge a new migration that fixes or reverts the change, then
-   deploy it with this workflow. Do not edit or delete migrations that are
-   already in the remote history.
+3. Do not re-run blindly. Diagnose with a disposable database built from the
+   same migrations, or with read-only access to production.
+4. Roll forward: merge a new migration that fixes or reverts the change into
+   `dev`, then promote `dev` to `main`; the next green CI run deploys it. Do not
+   edit or delete migrations that are already in the remote history.
 5. For data loss, restore from Supabase backups or point-in-time recovery,
    following the platform restore procedure, then re-establish the baseline.
 
 ## Residual risks
 
-- Reviewers, deployment branch rules, secret scoping and the Supabase GitHub
-  integration are platform settings; this repository cannot verify them.
+- Branch protection on `main`, the environment branch policy, secret scoping and
+  the Supabase GitHub integration are platform settings; this repository cannot
+  verify them.
+- Every green promotion deploys without a human approval step; review happens
+  on the `dev` to `main` pull request.
 - Between the dry run and `db push`, another client could change the remote
   history. The post-push verification detects it but cannot prevent it.
 - The pinned digest proves the archive is the one reviewed at pin time, not
@@ -192,6 +229,12 @@ the same run applied while later ones are not.
 - `actions/checkout@v4` is a first-party action referenced by tag.
 - Telemetry opt-out relies on the CLI honouring `SUPABASE_TELEMETRY_DISABLED`
   and `DO_NOT_TRACK`; the workflow cannot verify it.
+
+## Out of scope
+
+Per-environment branches (for example a staging branch deploying to a staging
+project) are explicitly out of scope. The workflow deploys only `main` to the
+single project configured in `supabase-production`.
 
 ## Local verification
 
