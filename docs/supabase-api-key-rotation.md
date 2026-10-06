@@ -3,6 +3,8 @@
 **Resource:** Supabase project `zonar-hub`, project ref **`bwaskyulujzbnfrynvdd`**.
 **Dashboard location:** Project Settings → **API Keys**.
 
+> **Current status (2026-10-06):** For the local-only API, compatible code is in local commit `4244089` (not pushed; no PR, merge or deployment). The user created a new `sb_secret_` key, Supabase accepted it (HTTP 200 with a server-like User-Agent), and the local API started with it from `Supabase__Key`. The user **reported** disabling the legacy keys in Dashboard (change 4); this has not been independently verified. No hosted API exists yet. The steps below remain the procedure for any future host or key rotation.
+
 The legacy `service_role` key for this project was committed to this repository and must be treated as compromised. The API now supports new `sb_secret_…` keys (sent as `apikey` only, never as `Authorization: Bearer`), and the tracked `ZonarHub.ApiService/appsettings.Development.json` keeps `Supabase:Key` empty. Every environment must supply the key at runtime through `Supabase__Key`.
 
 Official references:
@@ -21,7 +23,7 @@ Official references:
 | 3 | Runtime: set `Supabase__Key` on the hosted API and restart | Hosting platform secret store | Yes |
 | 4 | Dashboard: disable legacy API keys | Supabase Dashboard, project `bwaskyulujzbnfrynvdd` | Yes, after all consumers are confirmed migrated |
 
-Approving one change does not approve the next; the later GitHub actions within change 1 also require individual approvals. No commit, push, PR, merge, or deployment has been authorized or performed here. **For today's local-only API, run the updated source directly; no Git delivery is needed for a local key check.** A future hosted API must first deploy compatible code before switching its runtime key, because older builds send the key as a Bearer token. No hosted API or secret-store owner has been identified.
+Approving one change does not approve the next; the later GitHub actions within change 1 also require individual approvals. The API-key remediation has one authorized **local commit**; no push, PR, merge or deployment has been authorized or performed here. **For today's local-only API, run the updated source directly; no Git delivery is needed for a local key check.** A future hosted API must first deploy compatible code before switching its runtime key, because older builds send the key as a Bearer token. No hosted API or secret-store owner has been identified.
 
 ## Quick path
 
@@ -83,4 +85,4 @@ Enter the new key only into the no-echo prompt; never paste it into commands, ch
 
 ## Next step
 
-After change 4 is verified in the Dashboard, continue with the database migration work in `odd/tasks/supabase-api-key-remediation.md` (AK-4). That work needs its own approvals.
+The database migration work in `odd/tasks/supabase-api-key-remediation.md` (AK-4) is complete: migrations #19 and #20 were each applied once under separate approvals, and the shared database history is exactly 20/20 (see `odd/tasks/supabase-schema-reconciliation.md`). Push, PR, merge, deployment and GitHub environment setup each still need their own approval.
