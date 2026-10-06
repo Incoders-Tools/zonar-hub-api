@@ -112,7 +112,10 @@ SET
 	label_key = EXCLUDED.label_key,
 	sort_order = EXCLUDED.sort_order,
 	is_active = EXCLUDED.is_active,
-	updated_at_utc = NOW();
+	updated_at_utc = NOW()
+-- Replays leave identical seed rows, and their updated_at_utc, untouched.
+WHERE (system_modules.label_key, system_modules.sort_order, system_modules.is_active)
+	IS DISTINCT FROM (EXCLUDED.label_key, EXCLUDED.sort_order, EXCLUDED.is_active);
 
 INSERT INTO public.system_tools (
 	id,
@@ -160,6 +163,15 @@ SET
 	label_key = EXCLUDED.label_key,
 	route = EXCLUDED.route,
 	sort_order = EXCLUDED.sort_order,
-	is_system_admin_only = EXCLUDED.is_system_admin_only,
+	-- 20260507100000 opens plans/billing to admins; a replay must not restrict them again.
+	is_system_admin_only = CASE WHEN system_tools.key IN ('plans', 'billing')
+		THEN system_tools.is_system_admin_only ELSE EXCLUDED.is_system_admin_only END,
 	is_active = EXCLUDED.is_active,
-	updated_at_utc = NOW();
+	updated_at_utc = NOW()
+-- Replays leave identical seed rows, and their updated_at_utc, untouched.
+WHERE (system_tools.module_id, system_tools.label_key, system_tools.route, system_tools.sort_order,
+		system_tools.is_system_admin_only, system_tools.is_active)
+	IS DISTINCT FROM (EXCLUDED.module_id, EXCLUDED.label_key, EXCLUDED.route, EXCLUDED.sort_order,
+		CASE WHEN system_tools.key IN ('plans', 'billing')
+			THEN system_tools.is_system_admin_only ELSE EXCLUDED.is_system_admin_only END,
+		EXCLUDED.is_active);
