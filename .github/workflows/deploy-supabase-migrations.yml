@@ -115,9 +115,15 @@ jobs:
           CHECKOUT_SHA="$(git rev-parse HEAD)" REMOTE_MAIN_SHA="$remote_main_sha" \
             python3 supabase/scripts/verify_migration_plan.py check-main-head --event-json "$GITHUB_EVENT_PATH"
 
+      # Every database step trusts only the committed Supabase Root 2021 CA through
+      # PGSSLROOTCERT (verify-full on the session pooler; a direct sslmode=require URL
+      # becomes verify-ca). For the pooler, check-auto-config pins the CA digest, and on
+      # both routes it rejects PGSERVICE/PGSERVICEFILE. No step writes GITHUB_ENV, so
+      # the CLI steps inherit the same job environment that was checked here.
       - name: Validate environment configuration
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGSSLROOTCERT: ${{ github.workspace }}/supabase/certs/prod-ca-2021.crt
         run: |
           set -euo pipefail
           # A linked project would let the CLI target something other than --db-url.
@@ -166,6 +172,7 @@ jobs:
         timeout-minutes: 5
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGSSLROOTCERT: ${{ github.workspace }}/supabase/certs/prod-ca-2021.crt
         run: |
           set -euo pipefail
           if ! supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json \
@@ -178,6 +185,7 @@ jobs:
         timeout-minutes: 5
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGSSLROOTCERT: ${{ github.workspace }}/supabase/certs/prod-ca-2021.crt
         run: |
           set -euo pipefail
           if ! supabase db push --dry-run --db-url "$SUPABASE_DB_URL" \
@@ -213,6 +221,7 @@ jobs:
         timeout-minutes: 20
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGSSLROOTCERT: ${{ github.workspace }}/supabase/certs/prod-ca-2021.crt
         run: |
           set -euo pipefail
           if ! supabase db push --yes --db-url "$SUPABASE_DB_URL" \
@@ -227,6 +236,7 @@ jobs:
         timeout-minutes: 5
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGSSLROOTCERT: ${{ github.workspace }}/supabase/certs/prod-ca-2021.crt
         run: |
           set -euo pipefail
           if ! supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json \

@@ -43,7 +43,7 @@ by an earlier failed run.
 | Step | Database secret | What it does |
 |------|-----------------|--------------|
 | Re-bind run to current main head after gate | no | `check-main-head`: CI head SHA from the event file equals the checkout and the current `main` head |
-| Validate environment configuration | yes | rejects a linked project (`supabase/.temp`); `check-auto-config` validates `SUPABASE_PROJECT_REF`, `SUPABASE_APPROVED_BASELINE` and `SUPABASE_DB_URL` |
+| Validate environment configuration | yes | rejects a linked project (`supabase/.temp`); `check-auto-config` validates `SUPABASE_PROJECT_REF`, `SUPABASE_APPROVED_BASELINE`, `SUPABASE_DB_URL` and, for the session pooler, the pinned CA; rejects `PGSERVICE`/`PGSERVICEFILE` |
 | Install verified Supabase CLI / version check | no | pinned 2.109.0 archive, SHA-256 checked before extraction |
 | Read remote migration history | yes | `supabase migration list`; must exit 0 |
 | Dry run pending migrations | yes | `supabase db push --dry-run`; must exit 0 |
@@ -52,7 +52,10 @@ by an earlier failed run.
 | Apply migrations | yes | `supabase db push --yes` exactly once, only when `pending == 'true'` |
 | Verify remote migration history | yes | runs whenever the push step ran, including after a failed push, unless the run was cancelled; `verify-auto-applied` requires the remote history to equal the full local manifest |
 
-The secret is mapped only into those five steps. Event data reaches scripts
+The secret is mapped only into those five steps, together with
+`PGSSLROOTCERT: ${{ github.workspace }}/supabase/certs/prod-ca-2021.crt`.
+The path comes from the runner-provided workspace, never from event data, and
+no other step receives either value. Event data reaches scripts
 through the event file, never by expression interpolation, and the GitHub token
 only has `contents: read` (the gate also has `pull-requests: read`).
 
@@ -67,7 +70,12 @@ procedure below before retrying.
 | Main is a green CI push of a merged same-repository `dev` to `main` PR | `check-ci-promotion` in `verify-promotion` |
 | The checkout and current `main` head equal the CI head SHA, after the gate and again right before `db push` | `check-main-head` |
 | `SUPABASE_PROJECT_REF` is a 20-character project ref and `SUPABASE_APPROVED_BASELINE` is a version | `check-auto-config` |
-| `SUPABASE_DB_URL` targets `db.<ref>.supabase.co:5432`, one host, user `postgres` with a password, database `/postgres`, `sslmode` of `require`, `verify-ca` or `verify-full`, no host/port overrides in the query | `check-auto-config` |
+| `SUPABASE_DB_URL` starts with a lowercase `postgresql://` or `postgres://` scheme and contains no whitespace or control characters | `check-auto-config` |
+| Direct route: `db.<ref>.supabase.co:5432`, one host, user `postgres` with a password, database `/postgres`, `sslmode` of `require`, `verify-ca` or `verify-full`, no host/port overrides in the query | `check-auto-config` |
+| Session pooler route: exactly `aws-1-us-east-2.pooler.supabase.com:5432`, user `postgres.<ref>` with a password, database `/postgres`, `sslmode=verify-full`, only `connect_timeout` (1 to 999) besides it, no encoded or repeated query values | `check-auto-config` |
+| Session pooler route: `PGSSLROOTCERT` is exactly `$GITHUB_WORKSPACE/supabase/certs/prod-ca-2021.crt`, a regular file holding one PEM certificate whose DER SHA-256 is the pinned digest | `check-auto-config` |
+| No `PGSERVICE` or `PGSERVICEFILE` is set, even empty, so no service file can override host or TLS settings | `check-auto-config` |
+| Only the five database steps receive the secret and `PGSSLROOTCERT`; no step writes `GITHUB_ENV`; the CLI commands are unchanged | `AutoDeployWorkflowTests`, `PinnedCaWorkflowTests` |
 | Supabase CLI is exactly 2.109.0 and its archive matches the pinned SHA-256 digest before extraction | "Install verified Supabase CLI" plus a version check |
 | No other workflow pushes migrations, links a project or reads the database secret | `DeployWorkflowTests` |
 | Local versions reported by the CLI equal the checked-out manifest | `auto-plan` |
@@ -125,8 +133,14 @@ workflow cannot enforce them, and the automatic route is only safe with them.
    required reviewers remain; adding one pauses deployment for approval. Apply
    any GitHub setting change only with its own authorization.
 3. Add to that environment only:
-   - Secret `SUPABASE_DB_URL`: the direct connection string, for example
+   - Secret `SUPABASE_DB_URL`: one of the two connection strings described in
+     [Connection routes and TLS](#connection-routes-and-tls). For GitHub-hosted
+     runners use the session pooler:
+     `postgresql://postgres.<ref>:<percent-encoded-password>@aws-1-us-east-2.pooler.supabase.com:5432/postgres?sslmode=verify-full`.
+     The direct form remains accepted:
      `postgresql://postgres:<percent-encoded-password>@db.<ref>.supabase.co:5432/postgres?sslmode=require`.
+     Both examples are validated by `ReadmeConnectionTests` with placeholder
+     values; never paste a real password into this repository, an issue or a log.
    - Variable `SUPABASE_PROJECT_REF`: the 20-character project ref.
    - Variable `SUPABASE_APPROVED_BASELINE`: see the next section.
    A missing or invalid value fails the run before the CLI is installed.
@@ -147,10 +161,68 @@ workflow cannot enforce them, and the automatic route is only safe with them.
    repository or organization level. GitHub falls
    back to those scopes when the environment value is missing, so a stray
    repository secret would bypass the environment boundary.
-6. The direct host `db.<ref>.supabase.co` resolves to IPv6 unless the project has
-   the IPv4 add-on. GitHub-hosted runners have no IPv6 egress, so enable the IPv4
-   add-on (or use a self-hosted runner with IPv6) before the first merge to
-   `main`; otherwise the history step fails and nothing is applied.
+6. Choose the connection route before the first merge to `main`. The direct
+   host `db.<ref>.supabase.co` is still supported but resolves to IPv6 only
+   unless the project has the IPv4 add-on, and GitHub-hosted runners have no
+   IPv6 egress. Without the add-on (or a self-hosted runner with IPv6), use the
+   session pooler; otherwise the history step fails and nothing is applied.
+
+## Connection routes and TLS
+
+`check-auto-config` accepts exactly two shapes of `SUPABASE_DB_URL`.
+
+**Session pooler (IPv4, recommended for GitHub-hosted runners).**
+
+- Host: exactly `aws-1-us-east-2.pooler.supabase.com`, as a DNS name. Copy the
+  host from the project's Connect dialog and confirm it matches; another
+  region, cluster, an IP literal or a trailing dot is rejected. IP literals are
+  refused because the pinned CLI skips hostname verification for them.
+- Port: `5432`, the session mode pooler. Port `6543` is the transaction mode
+  pooler, which does not keep session state across statements and is rejected
+  for migrations.
+- User: `postgres.<ref>`, where `<ref>` equals `SUPABASE_PROJECT_REF`; the plain
+  `postgres` user is rejected on the pooler.
+- TLS: `sslmode=verify-full` only. The CLI verifies the server certificate and
+  hostname against the CA named by `PGSSLROOTCERT`.
+
+**Direct host.** `db.<ref>.supabase.co:5432`, user `postgres`, with `sslmode`
+of `require`, `verify-ca` or `verify-full`. Because the database steps also set
+`PGSSLROOTCERT`, the CLI (pgconn) treats `sslmode=require` like `verify-ca`
+against the pinned CA. The planner checks the CA digest only on the pooler
+route; on the direct route a wrong CA makes the CLI connection fail.
+
+### Pinned CA
+
+The public Supabase Root 2021 CA is committed at
+`supabase/certs/prod-ca-2021.crt`. It is a public certificate, not a secret.
+The planner pins the SHA-256 of its DER encoding,
+`807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa`, so line
+ending conversion on checkout cannot change the result. To check it locally:
+
+```bash
+openssl x509 -in supabase/certs/prod-ca-2021.crt -outform DER | sha256sum
+```
+
+The workflow passes
+`PGSSLROOTCERT: ${{ github.workspace }}/supabase/certs/prod-ca-2021.crt` to the
+five database steps. `GITHUB_WORKSPACE` is set by the runner; the workflow never
+builds the path from event data or other untrusted values. `check-auto-config`
+requires that exact path, a regular file (not a symlink) and exactly one PEM
+certificate with the pinned digest.
+
+`PGSERVICE` and `PGSERVICEFILE` must not be set at all, not even empty: a
+connection service file is merged over the environment and could replace
+`PGSSLROOTCERT` or the host. The workflow sets no `PG*` variable other than
+`PGSSLROOTCERT` and does not write `GITHUB_ENV`, so the CLI steps inherit the
+same job environment that the configuration step checked.
+
+**CA rotation fails closed.** If Supabase rotates its server certificates to a
+different root, the CLI cannot verify the pooler or direct host and the run
+fails before applying anything. Do not weaken `sslmode` to recover. Download
+the new public CA from the Supabase dashboard, verify it through a second
+channel, then replace the file and update `POOLER_CA_DER_SHA256` in
+`verify_migration_plan.py` and the recorded digest in the tests and this
+runbook in one reviewed pull request.
 
 ## Baseline bootstrap (once, outside the workflow)
 
@@ -229,6 +301,15 @@ the same run applied while later ones are not.
 - `actions/checkout@v4` is a first-party action referenced by tag.
 - Telemetry opt-out relies on the CLI honouring `SUPABASE_TELEMETRY_DISABLED`
   and `DO_NOT_TRACK`; the workflow cannot verify it.
+- CLI handling of `PGSSLROOTCERT` with `verify-full` was proven offline against
+  a disposable PostgreSQL, not against the real pooler from a GitHub-hosted
+  runner. The first real run is the end-to-end check; it fails closed if TLS or
+  connectivity does not work.
+- The pooler host and the CA are pinned in code. A Supabase change to either
+  stops deployment until a reviewed update lands.
+- Main branch protection, the environment branch policy, environment-scoped
+  secrets and disabling alternative writers (Supabase GitHub integration,
+  branching, manual pushes) remain required, as does the reviewed baseline.
 
 ## Out of scope
 
