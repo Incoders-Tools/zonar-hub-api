@@ -34,6 +34,10 @@ OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98"
 # Sentinel password: no test output may ever contain it.
 SECRET = "S3cr3t-Sentinel-Pa55"
 GOOD_URL = f"postgresql://postgres:{SECRET}@db.{REF}.supabase.co:5432/postgres?sslmode=require"
+# Public Supabase Root 2021 CA committed for the session pooler; DER SHA-256 is line-ending invariant.
+CA_FILE = REPO_ROOT / "supabase" / "certs" / "prod-ca-2021.crt"
+CA_RELATIVE = "supabase/certs/prod-ca-2021.crt"
+CA_DER_SHA256 = "807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa"
 
 FILES = [
     "20260430120000_create_organizations.sql",
@@ -387,6 +391,107 @@ class DatabaseUrlTests(unittest.TestCase):
         for ref in ("", "ABCDEFGHIJKLMNOPQRST", "short", REF + "x", "abc.defghijklmnopqrs"):
             with self.subTest(ref=ref), self.assertRaisesRegex(vmp.PlanError, "project ref"):
                 vmp.validate_db_url(GOOD_URL, ref)
+
+
+class PinnedCaTests(unittest.TestCase):
+    """The session pooler trusts only the committed Supabase Root 2021 CA."""
+
+    def setUp(self):
+        workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(workdir.cleanup)
+        self.workspace = workdir.name
+        self.ca_path = Path(self.workspace, *CA_RELATIVE.split("/"))
+        self.ca_path.parent.mkdir(parents=True)
+        shutil.copyfile(CA_FILE, self.ca_path)
+
+    def env(self, **overrides):
+        env = {"GITHUB_WORKSPACE": self.workspace, "PGSSLROOTCERT": f"{self.workspace}/{CA_RELATIVE}"}
+        env.update(overrides)
+        return {key: value for key, value in env.items() if value is not None}
+
+    def assert_rejected(self, env, message):
+        with self.assertRaises(vmp.PlanError) as raised:
+            vmp.validate_pinned_ca(env)
+        self.assertIn(message, str(raised.exception))
+        self.assertNotIn(SECRET, str(raised.exception))
+        self.assertNotIn("evil", str(raised.exception))
+
+    def test_committed_certificate_is_the_public_supabase_root_2021_ca(self):
+        text = CA_FILE.read_text(encoding="ascii")
+        self.assertEqual(vmp.POOLER_CA_DER_SHA256, CA_DER_SHA256)
+        self.assertEqual(vmp.POOLER_CA_RELATIVE_PATH, CA_RELATIVE)
+        self.assertEqual(text.count("-----BEGIN "), 1)
+        self.assertIn("-----BEGIN CERTIFICATE-----", text)
+        self.assertNotIn("PRIVATE", text)
+
+    def test_accepts_exact_workspace_certificate(self):
+        vmp.validate_pinned_ca(self.env())
+
+    def test_pin_is_line_ending_invariant(self):
+        text = self.ca_path.read_text(encoding="ascii").replace("\r\n", "\n")
+        self.ca_path.write_bytes(text.replace("\n", "\r\n").encode("ascii"))
+        vmp.validate_pinned_ca(self.env())
+
+    def test_rejects_missing_or_wrong_certificate_path(self):
+        elsewhere = Path(self.workspace, "other.crt")
+        shutil.copyfile(self.ca_path, elsewhere)
+        expected = f"{self.workspace}/{CA_RELATIVE}"
+        cases = (
+            ({"PGSSLROOTCERT": None}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": ""}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": str(elsewhere)}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": CA_RELATIVE}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": expected + " "}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": f"/tmp/evil-{SECRET}.crt"}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": expected.replace("prod-ca-2021", "../certs/prod-ca-2021")}, "PGSSLROOTCERT"),
+            ({"GITHUB_WORKSPACE": None}, "GITHUB_WORKSPACE"),
+            ({"GITHUB_WORKSPACE": ""}, "GITHUB_WORKSPACE"),
+            ({"GITHUB_WORKSPACE": "relative/evil", "PGSSLROOTCERT": f"relative/evil/{CA_RELATIVE}"},
+             "GITHUB_WORKSPACE"),
+            ({"GITHUB_WORKSPACE": self.workspace + "\n"}, "GITHUB_WORKSPACE"),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=sorted(overrides)):
+                self.assert_rejected(self.env(**overrides), message)
+
+    def test_rejects_absent_or_non_regular_certificate_file(self):
+        self.ca_path.unlink()
+        self.assert_rejected(self.env(), "missing")
+        self.ca_path.mkdir()
+        self.assert_rejected(self.env(), "missing")
+
+    def test_rejects_symlinked_certificate(self):
+        real = Path(self.workspace, "real.crt")
+        shutil.copyfile(self.ca_path, real)
+        self.ca_path.unlink()
+        try:
+            self.ca_path.symlink_to(real)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks are not available on this host")
+        self.assert_rejected(self.env(), "missing")
+
+    def test_rejects_tampered_or_padded_certificate(self):
+        original = self.ca_path.read_text(encoding="ascii")
+        body = original.split("\n")
+        line = body[5]
+        body[5] = ("B" if line[0] != "B" else "C") + line[1:]
+        other_pem = original.replace("CERTIFICATE", "PRIVATE KEY")
+        cases = {
+            "tampered": ("\n".join(body), "does not match"),
+            "second certificate": (original + original, "exactly one"),
+            "private key": (original + other_pem, "exactly one"),
+            "key only": (other_pem, "exactly one"),
+            "empty": ("", "exactly one"),
+            "leading text": ("evil\n" + original, "exactly one"),
+            "bad base64": (original.replace(line, "*" + line[1:]), "exactly one"),
+            "bad padding": (original.replace(line, line[:-1]), "exactly one"),
+        }
+        for label, (text, message) in cases.items():
+            with self.subTest(label=label):
+                self.ca_path.write_text(text, encoding="ascii", newline="\n")
+                self.assert_rejected(self.env(), message)
+        self.ca_path.write_bytes(b"\xff\xfe" + original.encode("ascii"))
+        self.assert_rejected(self.env(), "unreadable")
 
 
 class ContextTests(unittest.TestCase):
