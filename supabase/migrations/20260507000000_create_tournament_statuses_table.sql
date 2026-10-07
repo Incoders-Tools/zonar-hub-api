@@ -63,7 +63,14 @@ ON CONFLICT (key) DO UPDATE SET
     description_pt = EXCLUDED.description_pt,
     sort_order = EXCLUDED.sort_order,
     is_active = EXCLUDED.is_active,
-    updated_at_utc = NOW();
+    updated_at_utc = NOW()
+-- Replays leave identical seed rows, and their updated_at_utc, untouched.
+WHERE (tournament_statuses.name_es, tournament_statuses.name_en, tournament_statuses.name_pt,
+       tournament_statuses.description_es, tournament_statuses.description_en, tournament_statuses.description_pt,
+       tournament_statuses.sort_order, tournament_statuses.is_active)
+    IS DISTINCT FROM (EXCLUDED.name_es, EXCLUDED.name_en, EXCLUDED.name_pt,
+       EXCLUDED.description_es, EXCLUDED.description_en, EXCLUDED.description_pt,
+       EXCLUDED.sort_order, EXCLUDED.is_active);
 
 -- Drop the legacy JSON-backed setting so old data no longer leaks into
 -- the application after the migration runs.

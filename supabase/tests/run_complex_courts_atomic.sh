@@ -35,6 +35,60 @@ for migration in supabase/migrations/*.sql; do
   docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < "$migration"
 done
 
+# Full seed rows, including updated_at_utc, of the catalogs the eight pending
+# data migrations upsert, delete or update.
+seed_snapshot() {
+  docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres <<'SQL'
+SELECT 'roles ' || r::text FROM public.roles r
+UNION ALL SELECT 'system_modules ' || m::text FROM public.system_modules m
+UNION ALL SELECT 'system_tools ' || t::text FROM public.system_tools t
+UNION ALL SELECT 'tournament_statuses ' || s::text FROM public.tournament_statuses s
+UNION ALL SELECT 'tournament_rules ' || r::text FROM public.tournament_rules r
+ORDER BY 1;
+SQL
+}
+
+# Replaying the eight pending data migrations in order must leave every seeded
+# row untouched, timestamps included. The pause guarantees a later NOW().
+seed_replayable=(
+  20260506074824_create_roles_and_user_role_fk 20260506081306_add_user_org_permissions
+  20260506120000_cleanup_orphaned_tenants 20260506130000_remove_duplicate_tenants_tool
+  20260507000000_create_tournament_statuses_table 20260507100000_open_plans_and_billing_to_admins
+  20260507200000_extend_tournaments_table 20260508120000_create_tournament_rules_table
+)
+before_seed_replay="$(seed_snapshot)"
+sleep 0.1
+for version in "${seed_replayable[@]}"; do
+  printf 'Replaying %s\n' "$version"
+  docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < "supabase/migrations/$version.sql"
+  # Admins keep plans/billing between replayed files, not only at the end.
+  access="$(docker exec "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres -c \
+    "SELECT string_agg(is_system_admin_only::text, ',' ORDER BY key) FROM public.system_tools WHERE key IN ('billing', 'plans')")"
+  if [[ "$access" != 'false,false' ]]; then
+    echo "Replay of $version restricted billing,plans to system admins: $access" >&2
+    exit 1
+  fi
+done
+if [[ "$(seed_snapshot)" != "$before_seed_replay" ]]; then
+  echo 'Replay changed seeded catalog rows' >&2
+  diff <(printf '%s\n' "$before_seed_replay") <(seed_snapshot) >&2 || true
+  exit 1
+fi
+# roles|modules|tools|statuses|rules|billing,plans system-admin-only|tenants tools
+seed_counts="$(docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres <<'SQL'
+SELECT concat_ws('|', (SELECT count(*) FROM public.roles), (SELECT count(*) FROM public.system_modules),
+  (SELECT count(*) FROM public.system_tools), (SELECT count(*) FROM public.tournament_statuses),
+  (SELECT count(*) FROM public.tournament_rules),
+  (SELECT string_agg(is_system_admin_only::text, ',' ORDER BY key) FROM public.system_tools WHERE key IN ('billing', 'plans')),
+  (SELECT count(*) FROM public.system_tools WHERE key = 'tenants'));
+SQL
+)"
+if [[ "$seed_counts" != '6|4|26|4|3|false,false|0' ]]; then
+  echo "Unexpected seeded catalog state after replay: $seed_counts" >&2
+  exit 1
+fi
+echo 'Replay of pending data migrations preserved seeded rows, counts, plans/billing access and tenants removal: passed'
+
 # Supabase grants its bypass-RLS service role access to application relations.
 # Keep the harness grants limited to the aggregate RPC's fixture and write tables.
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'

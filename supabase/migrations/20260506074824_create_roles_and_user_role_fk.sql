@@ -45,7 +45,10 @@ SET
     description = EXCLUDED.description,
     is_active = EXCLUDED.is_active,
     is_system = EXCLUDED.is_system,
-    updated_at_utc = NOW();
+    updated_at_utc = NOW()
+-- Replays leave identical seed rows, and their updated_at_utc, untouched.
+WHERE (roles.name, roles.description, roles.is_active, roles.is_system)
+    IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.description, EXCLUDED.is_active, EXCLUDED.is_system);
 
 ALTER TABLE public.users
     ADD COLUMN IF NOT EXISTS role_id TEXT;

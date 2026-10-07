@@ -9,4 +9,6 @@
 UPDATE public.system_tools
 SET is_system_admin_only = FALSE,
     updated_at_utc = NOW()
-WHERE key IN ('plans', 'billing');
+WHERE key IN ('plans', 'billing')
+  -- Replays leave already-open tools, and their updated_at_utc, untouched.
+  AND is_system_admin_only;
