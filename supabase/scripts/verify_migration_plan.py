@@ -24,6 +24,9 @@ CI push to main. The first five are not referenced by any workflow.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -53,6 +56,11 @@ DIRECT_PORT = 5432
 # database; pooler-style users such as `postgres.<ref>` are rejected.
 DIRECT_USER = "postgres"
 DIRECT_DATABASE_PATH = "/postgres"
+# Public Supabase Root 2021 CA committed for the pooler. The pin is the DER digest so
+# checkout line-ending conversion cannot change it; PGSSLROOTCERT must name this file.
+POOLER_CA_RELATIVE_PATH = "supabase/certs/prod-ca-2021.crt"
+POOLER_CA_DER_SHA256 = "807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa"
+PEM_CERTIFICATE = re.compile(r"-----BEGIN CERTIFICATE-----([A-Za-z0-9+/=\s]+)-----END CERTIFICATE-----\s*")
 # The only workflow whose push run on main may authorize a production apply.
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -290,6 +298,36 @@ def validate_db_url(url: str, project_ref: str) -> None:
         raise PlanError("SUPABASE_DB_URL contains unsupported or repeated query parameters.")
     if dict(query).get("sslmode") not in TLS_MODES:
         raise PlanError("SUPABASE_DB_URL must set sslmode=require or stronger.")
+
+
+def validate_pinned_ca(env: Mapping[str, str]) -> None:
+    """Requires PGSSLROOTCERT to name the committed CA under GITHUB_WORKSPACE with the pinned digest.
+
+    The file must hold exactly one PEM certificate, so no extra trust anchor or key
+    can ride along. Messages never echo paths or file content.
+    """
+    workspace = env.get("GITHUB_WORKSPACE", "")
+    if not workspace or any(ord(char) < 32 for char in workspace) or not os.path.isabs(workspace):
+        raise PlanError("GITHUB_WORKSPACE must be an absolute path without control characters.")
+    expected = f"{workspace}/{POOLER_CA_RELATIVE_PATH}"
+    if env.get("PGSSLROOTCERT", "") != expected:
+        raise PlanError("PGSSLROOTCERT must point to the pinned CA certificate in the workspace.")
+    path = Path(expected)
+    if path.is_symlink() or not path.is_file():
+        raise PlanError("Pinned CA certificate file is missing or not a regular file.")
+    try:
+        text = path.read_text(encoding="ascii")
+    except (OSError, ValueError):
+        raise PlanError("Pinned CA certificate file is unreadable.") from None
+    match = PEM_CERTIFICATE.fullmatch(text)
+    try:
+        der = base64.b64decode("".join(match.group(1).split()), validate=True) if match else b""
+    except binascii.Error:
+        der = b""
+    if not der:
+        raise PlanError("Pinned CA certificate file must contain exactly one PEM certificate.")
+    if hashlib.sha256(der).hexdigest() != POOLER_CA_DER_SHA256:
+        raise PlanError("Pinned CA certificate does not match the approved Supabase Root 2021 CA.")
 
 
 def validate_context(ref: str, input_sha: str, workflow_sha: str, checkout_sha: str, remote_main_sha: str) -> None:
