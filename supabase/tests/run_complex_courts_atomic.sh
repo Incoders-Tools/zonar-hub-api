@@ -28,12 +28,170 @@ docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
 CREATE ROLE service_role LOGIN BYPASSRLS;
 CREATE ROLE authenticated LOGIN;
 CREATE ROLE anon LOGIN;
+-- Schema usage lets privilege probes reach table and function ACLs.
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 SQL
 
+# REQ-AUD-016 and session secrecy: application roles hold only the intended
+# table privileges. RLS does not stop TRUNCATE, and service_role bypasses RLS,
+# so both catalog ACLs and real statements are probed. Synthetic UUIDs only.
+probe_impersonation_privileges() {
+  docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres <<'SQL'
+BEGIN;
+DO $$
+DECLARE
+    probe record;
+    allowed boolean;
+    visible bigint;
+BEGIN
+    FOR probe IN
+        SELECT role_name, rel, privilege
+          FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) role_name,
+               unnest(ARRAY['public.impersonation_sessions', 'public.impersonation_audit']) rel,
+               unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) privilege
+    LOOP
+        IF has_table_privilege(probe.role_name, probe.rel, probe.privilege)
+           IS DISTINCT FROM (probe.role_name = 'service_role' AND (probe.privilege IN ('SELECT', 'INSERT')
+               OR (probe.privilege = 'UPDATE' AND probe.rel = 'public.impersonation_sessions'))) THEN
+            RAISE EXCEPTION '% % privilege for % is %', probe.rel, probe.privilege, probe.role_name,
+                has_table_privilege(probe.role_name, probe.rel, probe.privilege);
+        END IF;
+    END LOOP;
+    -- Ordered: service_role first creates the session the audit row references.
+    FOR probe IN SELECT * FROM (VALUES
+        ('service_role', 'INSERT INTO public.impersonation_sessions (id, real_user_id, target_user_id, started_at, expires_at, tenant_id) '
+         || 'VALUES (''a0000000-0000-0000-0000-000000000001'', ''a0000000-0000-0000-0000-000000000002'', '
+         || '''a0000000-0000-0000-0000-000000000003'', now(), now() + interval ''1 hour'', '
+         || '''a0000000-0000-0000-0000-000000000004'')', true),
+        ('service_role', 'SELECT 1 FROM public.impersonation_sessions', true),
+        ('service_role', 'UPDATE public.impersonation_sessions SET revoked_at = now() '
+         || 'WHERE id = ''a0000000-0000-0000-0000-000000000001''', true),
+        ('service_role', 'DELETE FROM public.impersonation_sessions', false),
+        ('service_role', 'TRUNCATE public.impersonation_sessions', false),
+        ('service_role', 'INSERT INTO public.impersonation_audit (id, session_id, real_user_id, effective_user_id, method, path, event_type) '
+         || 'VALUES (''a0000000-0000-0000-0000-000000000005'', ''a0000000-0000-0000-0000-000000000001'', '
+         || '''a0000000-0000-0000-0000-000000000002'', ''a0000000-0000-0000-0000-000000000003'', ''GET'', ''/probe'', ''request'')', true),
+        ('service_role', 'SELECT 1 FROM public.impersonation_audit', true),
+        ('service_role', 'UPDATE public.impersonation_audit SET path = ''/tampered''', false),
+        ('service_role', 'DELETE FROM public.impersonation_audit', false),
+        ('service_role', 'TRUNCATE public.impersonation_audit', false),
+        ('anon', 'SELECT 1 FROM public.impersonation_sessions', false),
+        ('anon', 'INSERT INTO public.impersonation_sessions DEFAULT VALUES', false),
+        ('anon', 'UPDATE public.impersonation_sessions SET revoked_at = now()', false),
+        ('anon', 'DELETE FROM public.impersonation_sessions', false),
+        ('anon', 'TRUNCATE public.impersonation_sessions', false),
+        ('anon', 'SELECT 1 FROM public.impersonation_audit', false),
+        ('anon', 'INSERT INTO public.impersonation_audit DEFAULT VALUES', false),
+        ('anon', 'UPDATE public.impersonation_audit SET path = ''/tampered''', false),
+        ('anon', 'DELETE FROM public.impersonation_audit', false),
+        ('anon', 'TRUNCATE public.impersonation_audit', false),
+        ('authenticated', 'SELECT 1 FROM public.impersonation_sessions', false),
+        ('authenticated', 'INSERT INTO public.impersonation_sessions DEFAULT VALUES', false),
+        ('authenticated', 'UPDATE public.impersonation_sessions SET revoked_at = now()', false),
+        ('authenticated', 'DELETE FROM public.impersonation_sessions', false),
+        ('authenticated', 'TRUNCATE public.impersonation_sessions', false),
+        ('authenticated', 'SELECT 1 FROM public.impersonation_audit', false),
+        ('authenticated', 'INSERT INTO public.impersonation_audit DEFAULT VALUES', false),
+        ('authenticated', 'UPDATE public.impersonation_audit SET path = ''/tampered''', false),
+        ('authenticated', 'DELETE FROM public.impersonation_audit', false),
+        ('authenticated', 'TRUNCATE public.impersonation_audit', false)
+    ) AS probes(role_name, statement, expected) LOOP
+        BEGIN
+            EXECUTE format('SET LOCAL ROLE %I', probe.role_name);
+            EXECUTE probe.statement;
+            allowed := true;
+        EXCEPTION
+            WHEN insufficient_privilege THEN
+                allowed := false;
+            -- The privilege check passed; only the audit foreign key blocked the row removal.
+            WHEN foreign_key_violation OR feature_not_supported THEN
+                allowed := true;
+        END;
+        RESET ROLE;
+        IF allowed IS DISTINCT FROM probe.expected THEN
+            RAISE EXCEPTION 'impersonation % for %: allowed=%, expected=%',
+                probe.statement, probe.role_name, allowed, probe.expected;
+        END IF;
+    END LOOP;
+    SET LOCAL ROLE service_role;
+    SELECT count(*) INTO visible FROM public.impersonation_audit a
+      JOIN public.impersonation_sessions s ON s.id = a.session_id
+     WHERE a.path = '/probe' AND s.revoked_at IS NOT NULL;
+    RESET ROLE;
+    IF visible <> 1 THEN
+        RAISE EXCEPTION 'service_role cannot read its revoked session audit row: %', visible;
+    END IF;
+END $$;
+ROLLBACK;
+SQL
+}
+
+# Hosted Supabase grants every new public table to the API roles by default.
+# Emulate that only around the first apply of the impersonation migration, so
+# the other files keep their explicit limited-grant signal.
 for migration in supabase/migrations/*.sql; do
+  hosted_defaults=false
+  if [[ "$migration" == */20260515_create_impersonation_tables.sql ]]; then
+    hosted_defaults=true
+    docker exec "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres -c \
+      'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;'
+  fi
   printf 'Applying %s\n' "$migration"
   docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < "$migration"
+  if [[ "$hosted_defaults" == true ]]; then
+    docker exec "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres -c \
+      'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated, service_role;'
+    [[ "$(docker exec "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres -c 'SELECT count(*) FROM pg_default_acl')" == 0 ]]
+  fi
+  if [[ "$migration" == */20260515_create_impersonation_tables.sql ]]; then
+    probe_impersonation_privileges
+    echo 'First apply under hosted default grants leaves least-privilege impersonation ACLs: passed'
+  fi
 done
+
+# Catalog fingerprint of every object owned by the replayable migration.
+# A pinned search_path keeps renderings schema-qualified and deterministic.
+replay_snapshot() {
+  docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres <<'SQL'
+SET search_path = pg_catalog;
+WITH rels(rel) AS (VALUES ('public.impersonation_sessions'::regclass), ('public.impersonation_audit'::regclass))
+SELECT format('column %s.%s %s notnull=%s default=%s', a.attrelid::regclass, a.attname,
+              format_type(a.atttypid, a.atttypmod), a.attnotnull, pg_get_expr(d.adbin, d.adrelid))
+  FROM pg_attribute a JOIN rels ON a.attrelid = rels.rel
+  LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+ WHERE a.attnum > 0 AND NOT a.attisdropped
+UNION ALL SELECT format('constraint %s %s', conrelid::regclass, pg_get_constraintdef(oid))
+  FROM pg_constraint WHERE conrelid IN (SELECT rel FROM rels)
+UNION ALL SELECT format('index %s', pg_get_indexdef(indexrelid)) FROM pg_index WHERE indrelid IN (SELECT rel FROM rels)
+UNION ALL SELECT format('table %s rls=%s force=%s acl=%s', oid::regclass, relrowsecurity, relforcerowsecurity, relacl)
+  FROM pg_class WHERE oid IN (SELECT rel FROM rels)
+UNION ALL SELECT format('policy %s %s permissive=%s cmd=%s roles=%s using=%s check=%s', polrelid::regclass, polname,
+              polpermissive, polcmd, polroles::regrole[], pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid))
+  FROM pg_policy WHERE polrelid IN (SELECT rel FROM rels)
+ORDER BY 1;
+SQL
+}
+
+# Pending migrations must be replayable on the schema they produced, without
+# duplicate objects or any change to columns, RLS, policies or grants.
+replayable=(
+  supabase/migrations/20260515_create_impersonation_tables.sql
+)
+before_replay="$(replay_snapshot)"
+for migration in "${replayable[@]}"; do
+  printf 'Replaying %s\n' "$migration"
+  docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < "$migration"
+done
+if [[ "$(replay_snapshot)" != "$before_replay" ]]; then
+  echo 'Replay changed the migrated schema' >&2
+  diff <(printf '%s\n' "$before_replay") <(replay_snapshot) >&2 || true
+  exit 1
+fi
+echo 'Replay of pending migrations preserved schema, RLS, policies and grants: passed'
+
+# Replay must not widen the impersonation ACLs left by the first apply.
+probe_impersonation_privileges
+echo 'Impersonation sessions are select/insert/update-only and audit insert/select-only for service_role, closed to anon/authenticated: passed'
 
 # Full seed rows, including updated_at_utc, of the catalogs the eight pending
 # data migrations upsert, delete or update.
@@ -88,6 +246,44 @@ if [[ "$seed_counts" != '6|4|26|4|3|false,false|0' ]]; then
   exit 1
 fi
 echo 'Replay of pending data migrations preserved seeded rows, counts, plans/billing access and tenants removal: passed'
+
+# Reused object names with a different definition must fail closed. Each drift
+# is introduced inside a transaction that psql abandons when the replay errors.
+expect_drift_rejected() {
+  local drift="$1" migration="$2" output
+  if output="$({ printf 'BEGIN;\n%s\n' "$drift"; cat "$migration"; printf 'ROLLBACK;\n'; } |
+      docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U postgres 2>&1)"; then
+    echo "Drift accepted by $migration: $drift" >&2
+    exit 1
+  fi
+  if ! grep -q 'schema drift' <<<"$output"; then
+    echo "Unexpected replay failure for $migration: $output" >&2
+    exit 1
+  fi
+}
+expect_drift_rejected 'ALTER POLICY "Service role insert on impersonation_audit" ON public.impersonation_audit TO service_role, anon;' \
+  supabase/migrations/20260515_create_impersonation_tables.sql
+expect_drift_rejected 'ALTER TABLE public.impersonation_sessions DROP CONSTRAINT impersonation_sessions_reason_check;' \
+  supabase/migrations/20260515_create_impersonation_tables.sql
+expect_drift_rejected 'DROP POLICY "Service role insert on impersonation_audit" ON public.impersonation_audit; CREATE POLICY "Service role insert on impersonation_audit" ON public.impersonation_audit TO service_role USING (true) WITH CHECK (true);' \
+  supabase/migrations/20260515_create_impersonation_tables.sql
+expect_drift_rejected 'CREATE ROLE audit_drift_probe; GRANT UPDATE ON public.impersonation_audit TO audit_drift_probe;' \
+  supabase/migrations/20260515_create_impersonation_tables.sql
+expect_drift_rejected 'CREATE ROLE audit_drift_probe; GRANT UPDATE (path) ON public.impersonation_audit TO audit_drift_probe;' \
+  supabase/migrations/20260515_create_impersonation_tables.sql
+expect_drift_rejected 'CREATE ROLE audit_drift_probe; GRANT TRUNCATE ON public.impersonation_sessions TO audit_drift_probe;' \
+  supabase/migrations/20260515_create_impersonation_tables.sql
+expect_drift_rejected 'CREATE ROLE audit_drift_probe; GRANT SELECT (target_user_id) ON public.impersonation_sessions TO audit_drift_probe;' \
+  supabase/migrations/20260515_create_impersonation_tables.sql
+[[ "$(replay_snapshot)" == "$before_replay" ]]
+echo 'Incompatible pre-existing definitions rejected on replay: passed'
+
+# Broad grants to the API roles are revoked by the replay.
+{ printf 'BEGIN;\nGRANT ALL ON public.impersonation_audit, public.impersonation_sessions TO anon, authenticated, service_role;\n'
+  cat supabase/migrations/20260515_create_impersonation_tables.sql
+  printf "SELECT has_table_privilege('service_role', 'public.impersonation_audit', 'UPDATE, DELETE, TRUNCATE') OR has_table_privilege('anon', 'public.impersonation_audit', 'SELECT, INSERT') OR has_table_privilege('authenticated', 'public.impersonation_audit', 'SELECT, INSERT') OR has_table_privilege('service_role', 'public.impersonation_sessions', 'DELETE, TRUNCATE') OR has_table_privilege('anon', 'public.impersonation_sessions', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE') OR has_table_privilege('authenticated', 'public.impersonation_sessions', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE');\nROLLBACK;\n"
+} | docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres | grep -Fx f >/dev/null
+echo 'Replay revokes broad impersonation grants: passed'
 
 # Supabase grants its bypass-RLS service role access to application relations.
 # Keep the harness grants limited to the aggregate RPC's fixture and write tables.
