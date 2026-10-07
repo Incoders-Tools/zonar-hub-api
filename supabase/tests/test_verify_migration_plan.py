@@ -34,6 +34,12 @@ OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98"
 # Sentinel password: no test output may ever contain it.
 SECRET = "S3cr3t-Sentinel-Pa55"
 GOOD_URL = f"postgresql://postgres:{SECRET}@db.{REF}.supabase.co:5432/postgres?sslmode=require"
+POOLER_HOST = "aws-1-us-east-2.pooler.supabase.com"
+POOLER_URL = f"postgresql://postgres.{REF}:{SECRET}@{POOLER_HOST}:5432/postgres?sslmode=verify-full"
+# Public Supabase Root 2021 CA committed for the session pooler; DER SHA-256 is line-ending invariant.
+CA_FILE = REPO_ROOT / "supabase" / "certs" / "prod-ca-2021.crt"
+CA_RELATIVE = "supabase/certs/prod-ca-2021.crt"
+CA_DER_SHA256 = "807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa"
 
 FILES = [
     "20260430120000_create_organizations.sql",
@@ -383,10 +389,252 @@ class DatabaseUrlTests(unittest.TestCase):
                 self.assertNotIn(SECRET, str(raised.exception))
                 self.assertNotIn("evil", str(raised.exception))
 
+    def test_accepts_both_exact_lowercase_schemes_on_both_routes(self):
+        for url in (GOOD_URL, POOLER_URL):
+            for scheme in ("postgres://", "postgresql://"):
+                with self.subTest(route=url.split("@", 1)[1][:6], scheme=scheme):
+                    vmp.validate_db_url(scheme + url.split("://", 1)[1], REF)
+
+    def test_requires_the_raw_lowercase_scheme_prefix_the_cli_checks(self):
+        # Supabase CLI (pgconn) parses a URL only for an exact, case-sensitive
+        # `postgres://`/`postgresql://` prefix; any other spelling becomes keyword/value.
+        for url in (GOOD_URL, POOLER_URL):
+            rest = url.split("://", 1)[1]
+            cases = {
+                "upper": "POSTGRESQL://" + rest,
+                "capitalized": "Postgres://" + rest,
+                "mixed": "postgreSQL://" + rest,
+                "mixed short": "pOstgres://" + rest,
+                "driver suffix": "postgresql+psycopg://" + rest,
+                "single slash": "postgresql:/" + rest,
+                "no slashes": "postgresql:" + rest,
+                "leading space": " " + url,
+                "leading tab": "\t" + url,
+                "leading newline": "\n" + url,
+                "leading carriage return": "\r" + url,
+                "leading nul": "\x00" + url,
+                "leading unit separator": "\x1f" + url,
+                "leading del": "\x7f" + url,
+                "tab in scheme": url.replace("postgres", "post\tgres", 1),
+                "newline in scheme": url.replace("://", ":\n//", 1),
+                "tab in host": url.replace("supabase.co", "supa\tbase.co", 1),
+                "carriage return in query": url.replace("sslmode=", "ssl\rmode=", 1),
+                "del in query": url + "\x7f",
+                "trailing space": url + " ",
+            }
+            for label, candidate in cases.items():
+                with self.subTest(route=rest[:9], label=label):
+                    with self.assertRaises(vmp.PlanError) as raised:
+                        vmp.validate_db_url(candidate, REF)
+                    self.assertNotIn(SECRET, str(raised.exception))
+
+    def test_rejects_plus_encoded_query_values_on_the_direct_route(self):
+        for url in (GOOD_URL.replace("sslmode=require", "sslmode=require+"),
+                    GOOD_URL.replace("sslmode=require", "sslmode=verify+full"),
+                    GOOD_URL + "&ssl+mode=disable"):
+            with self.subTest(url=url.split("?", 1)[1]):
+                with self.assertRaises(vmp.PlanError) as raised:
+                    vmp.validate_db_url(url, REF)
+                self.assertNotIn(SECRET, str(raised.exception))
+
     def test_rejects_invalid_project_ref(self):
         for ref in ("", "ABCDEFGHIJKLMNOPQRST", "short", REF + "x", "abc.defghijklmnopqrs"):
             with self.subTest(ref=ref), self.assertRaisesRegex(vmp.PlanError, "project ref"):
                 vmp.validate_db_url(GOOD_URL, ref)
+
+    def test_reports_the_direct_route(self):
+        self.assertEqual(vmp.validate_db_url(GOOD_URL, REF), vmp.DIRECT_ROUTE)
+
+
+class PoolerUrlTests(unittest.TestCase):
+    """The IPv4 session pooler is accepted only in one exact, verify-full shape."""
+
+    def test_accepts_exact_session_pooler_url(self):
+        cases = {
+            "plain": POOLER_URL,
+            "postgres scheme": POOLER_URL.replace("postgresql://", "postgres://"),
+            "timeout after": POOLER_URL + "&connect_timeout=10",
+            "timeout before": POOLER_URL.replace("?sslmode=verify-full", "?connect_timeout=10&sslmode=verify-full"),
+            "encoded password": POOLER_URL.replace(SECRET, SECRET + "%40%3A%2F"),
+        }
+        for label, url in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(vmp.validate_db_url(url, REF), vmp.POOLER_ROUTE)
+
+    def test_rejects_unsafe_pooler_urls_without_echoing_them(self):
+        authority = f"{POOLER_HOST}:5432"
+        cases = {
+            "transaction port": POOLER_URL.replace(authority, f"{POOLER_HOST}:6543"),
+            "implicit port": POOLER_URL.replace(authority, POOLER_HOST),
+            "other port": POOLER_URL.replace(authority, f"{POOLER_HOST}:5433"),
+            "other region": POOLER_URL.replace("us-east-2", "us-east-1"),
+            "other cluster": POOLER_URL.replace("aws-1-", "aws-0-"),
+            "uppercase host": POOLER_URL.replace(POOLER_HOST, POOLER_HOST.upper()),
+            "trailing dot": POOLER_URL.replace(authority, f"{POOLER_HOST}.:5432"),
+            "suffix trick": POOLER_URL.replace(authority, f"{POOLER_HOST}.evil.example:5432"),
+            "encoded host": POOLER_URL.replace("us-east-2.pooler", "us-east-2%2Epooler"),
+            "ipv4 literal": POOLER_URL.replace(POOLER_HOST, "3.131.0.1"),
+            "ipv6 literal": POOLER_URL.replace(POOLER_HOST, "[2600:1f16::1]"),
+            "multi host": POOLER_URL.replace(f"{authority}/", f"{authority},evil.example:5432/"),
+            "multiple at": POOLER_URL.replace(f"{SECRET}@", f"{SECRET}@evil.example@"),
+            "other ref user": POOLER_URL.replace(f"postgres.{REF}", f"postgres.{OTHER_REF}"),
+            "direct user": POOLER_URL.replace(f"postgres.{REF}:", "postgres:"),
+            "user suffix": POOLER_URL.replace(f"postgres.{REF}:", f"postgres.{REF}x:"),
+            "encoded user": POOLER_URL.replace(f"postgres.{REF}", f"postgres%2E{REF}"),
+            "other user": POOLER_URL.replace(f"postgres.{REF}", f"evil_admin.{REF}"),
+            "no password": POOLER_URL.replace(f":{SECRET}@", "@"),
+            "empty password": POOLER_URL.replace(f":{SECRET}@", ":@"),
+            "fragment": POOLER_URL + "#evil",
+            "empty fragment": POOLER_URL + "#",
+            "newline": POOLER_URL.replace("pooler.", "pooler\n."),
+            "space": POOLER_URL + "&connect_timeout=10 ",
+            "other database": POOLER_URL.replace("/postgres?", "/evil_db?"),
+            "nested path": POOLER_URL.replace("/postgres?", "/postgres/evil?"),
+            "no sslmode": POOLER_URL.replace("?sslmode=verify-full", ""),
+            "empty query": POOLER_URL.replace("sslmode=verify-full", ""),
+            "require": POOLER_URL.replace("verify-full", "require"),
+            "verify-ca": POOLER_URL.replace("verify-full", "verify-ca"),
+            "prefer": POOLER_URL.replace("verify-full", "prefer"),
+            "disable": POOLER_URL.replace("verify-full", "disable"),
+            "repeated sslmode": POOLER_URL + "&sslmode=verify-full",
+            "downgrade sslmode": POOLER_URL + "&sslmode=disable",
+            "encoded sslmode": POOLER_URL.replace("verify-full", "verify%2Dfull"),
+            "plus in sslmode": POOLER_URL.replace("verify-full", "verify-full+"),
+            "plus in timeout": POOLER_URL + "&connect_timeout=1+0",
+            "uppercase scheme": POOLER_URL.replace("postgresql://", "POSTGRESQL://"),
+            "sslrootcert": POOLER_URL + "&sslrootcert=/tmp/evil.crt",
+            "host override": POOLER_URL + "&host=evil.example",
+            "hostaddr override": POOLER_URL + "&hostaddr=203.0.113.9",
+            "port override": POOLER_URL + "&port=6543",
+            "options": POOLER_URL + "&options=-csearch_path%3Devil",
+            "empty item": POOLER_URL + "&&connect_timeout=10",
+            "bare key": POOLER_URL + "&connect_timeout",
+            "zero timeout": POOLER_URL + "&connect_timeout=0",
+            "text timeout": POOLER_URL + "&connect_timeout=evil",
+            "long timeout": POOLER_URL + "&connect_timeout=10000",
+            "repeated timeout": POOLER_URL + "&connect_timeout=10&connect_timeout=20",
+        }
+        for label, url in cases.items():
+            with self.subTest(label=label):
+                with self.assertRaises(vmp.PlanError) as raised:
+                    vmp.validate_db_url(url, REF)
+                self.assertNotIn(SECRET, str(raised.exception))
+                self.assertNotIn("evil", str(raised.exception))
+
+    def test_pooler_user_is_keyed_to_the_configured_project_ref(self):
+        with self.assertRaises(vmp.PlanError) as raised:
+            vmp.validate_db_url(POOLER_URL, OTHER_REF)
+        self.assertIn("postgres.<project ref>", str(raised.exception))
+        self.assertNotIn(SECRET, str(raised.exception))
+
+    def test_session_pooler_requires_verify_full(self):
+        with self.assertRaisesRegex(vmp.PlanError, "verify-full"):
+            vmp.validate_db_url(POOLER_URL.replace("verify-full", "require"), REF)
+
+    def test_transaction_pooler_is_named_in_the_error(self):
+        with self.assertRaisesRegex(vmp.PlanError, "session port 5432"):
+            vmp.validate_db_url(POOLER_URL.replace(":5432/", ":6543/"), REF)
+
+
+class PinnedCaTests(unittest.TestCase):
+    """The session pooler trusts only the committed Supabase Root 2021 CA."""
+
+    def setUp(self):
+        workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(workdir.cleanup)
+        self.workspace = workdir.name
+        self.ca_path = Path(self.workspace, *CA_RELATIVE.split("/"))
+        self.ca_path.parent.mkdir(parents=True)
+        shutil.copyfile(CA_FILE, self.ca_path)
+
+    def env(self, **overrides):
+        env = {"GITHUB_WORKSPACE": self.workspace, "PGSSLROOTCERT": f"{self.workspace}/{CA_RELATIVE}"}
+        env.update(overrides)
+        return {key: value for key, value in env.items() if value is not None}
+
+    def assert_rejected(self, env, message):
+        with self.assertRaises(vmp.PlanError) as raised:
+            vmp.validate_pinned_ca(env)
+        self.assertIn(message, str(raised.exception))
+        self.assertNotIn(SECRET, str(raised.exception))
+        self.assertNotIn("evil", str(raised.exception))
+
+    def test_committed_certificate_is_the_public_supabase_root_2021_ca(self):
+        text = CA_FILE.read_text(encoding="ascii")
+        self.assertEqual(vmp.POOLER_CA_DER_SHA256, CA_DER_SHA256)
+        self.assertEqual(vmp.POOLER_CA_RELATIVE_PATH, CA_RELATIVE)
+        self.assertEqual(text.count("-----BEGIN "), 1)
+        self.assertIn("-----BEGIN CERTIFICATE-----", text)
+        self.assertNotIn("PRIVATE", text)
+
+    def test_accepts_exact_workspace_certificate(self):
+        vmp.validate_pinned_ca(self.env())
+
+    def test_pin_is_line_ending_invariant(self):
+        text = self.ca_path.read_text(encoding="ascii").replace("\r\n", "\n")
+        self.ca_path.write_bytes(text.replace("\n", "\r\n").encode("ascii"))
+        vmp.validate_pinned_ca(self.env())
+
+    def test_rejects_missing_or_wrong_certificate_path(self):
+        elsewhere = Path(self.workspace, "other.crt")
+        shutil.copyfile(self.ca_path, elsewhere)
+        expected = f"{self.workspace}/{CA_RELATIVE}"
+        cases = (
+            ({"PGSSLROOTCERT": None}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": ""}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": str(elsewhere)}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": CA_RELATIVE}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": expected + " "}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": f"/tmp/evil-{SECRET}.crt"}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": expected.replace("prod-ca-2021", "../certs/prod-ca-2021")}, "PGSSLROOTCERT"),
+            ({"GITHUB_WORKSPACE": None}, "GITHUB_WORKSPACE"),
+            ({"GITHUB_WORKSPACE": ""}, "GITHUB_WORKSPACE"),
+            ({"GITHUB_WORKSPACE": "relative/evil", "PGSSLROOTCERT": f"relative/evil/{CA_RELATIVE}"},
+             "GITHUB_WORKSPACE"),
+            ({"GITHUB_WORKSPACE": self.workspace + "\n"}, "GITHUB_WORKSPACE"),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=sorted(overrides)):
+                self.assert_rejected(self.env(**overrides), message)
+
+    def test_rejects_absent_or_non_regular_certificate_file(self):
+        self.ca_path.unlink()
+        self.assert_rejected(self.env(), "missing")
+        self.ca_path.mkdir()
+        self.assert_rejected(self.env(), "missing")
+
+    def test_rejects_symlinked_certificate(self):
+        real = Path(self.workspace, "real.crt")
+        shutil.copyfile(self.ca_path, real)
+        self.ca_path.unlink()
+        try:
+            self.ca_path.symlink_to(real)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks are not available on this host")
+        self.assert_rejected(self.env(), "missing")
+
+    def test_rejects_tampered_or_padded_certificate(self):
+        original = self.ca_path.read_text(encoding="ascii")
+        body = original.split("\n")
+        line = body[5]
+        body[5] = ("B" if line[0] != "B" else "C") + line[1:]
+        other_pem = original.replace("CERTIFICATE", "PRIVATE KEY")
+        cases = {
+            "tampered": ("\n".join(body), "does not match"),
+            "second certificate": (original + original, "exactly one"),
+            "private key": (original + other_pem, "exactly one"),
+            "key only": (other_pem, "exactly one"),
+            "empty": ("", "exactly one"),
+            "leading text": ("evil\n" + original, "exactly one"),
+            "bad base64": (original.replace(line, "*" + line[1:]), "exactly one"),
+            "bad padding": (original.replace(line, line[:-1]), "exactly one"),
+        }
+        for label, (text, message) in cases.items():
+            with self.subTest(label=label):
+                self.ca_path.write_text(text, encoding="ascii", newline="\n")
+                self.assert_rejected(self.env(), message)
+        self.ca_path.write_bytes(b"\xff\xfe" + original.encode("ascii"))
+        self.assert_rejected(self.env(), "unreadable")
 
 
 class ContextTests(unittest.TestCase):
@@ -620,6 +868,43 @@ class CommandLineTests(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertIn("::error::", output)
                 self.assertNotIn(SECRET, output)
+
+    def test_check_db_url_reports_the_validated_route(self):
+        base = {"SUPABASE_PROJECT_REF": REF, "INPUT_PROJECT_REF": REF}
+        code, output = self.run_main(["check-db-url"], {**base, "SUPABASE_DB_URL": GOOD_URL})
+        self.assertEqual(code, 0, output)
+        self.assertIn("direct host with TLS", output)
+        with tempfile.TemporaryDirectory() as workspace:
+            ca_path = Path(workspace, *CA_RELATIVE.split("/"))
+            ca_path.parent.mkdir(parents=True)
+            shutil.copyfile(CA_FILE, ca_path)
+            pooler = {**base, "SUPABASE_DB_URL": POOLER_URL, "GITHUB_WORKSPACE": workspace,
+                      "PGSSLROOTCERT": f"{workspace}/{CA_RELATIVE}"}
+            code, output = self.run_main(["check-db-url"], pooler)
+            self.assertEqual(code, 0, output)
+            self.assertIn("session pooler with verify-full TLS and the pinned CA", output)
+            self.assertNotIn("direct host", output)
+            self.assertNotIn(SECRET, output)
+            for name in ("PGSERVICE", "PGSERVICEFILE"):
+                for env in ({**base, "SUPABASE_DB_URL": GOOD_URL}, pooler):
+                    with self.subTest(name=name, route=env["SUPABASE_DB_URL"][:20]):
+                        code, output = self.run_main(["check-db-url"], {**env, name: f"/tmp/{SECRET}"})
+                        self.assertEqual(code, 1)
+                        self.assertIn("PGSERVICE", output)
+                        self.assertNotIn(SECRET, output)
+            del pooler["PGSSLROOTCERT"]
+            code, output = self.run_main(["check-db-url"], pooler)
+            self.assertEqual(code, 1)
+            self.assertIn("PGSSLROOTCERT", output)
+            self.assertNotIn(SECRET, output)
+
+    def test_check_db_url_rejects_non_lowercase_scheme_without_echoing_the_secret(self):
+        url = GOOD_URL.replace("postgresql://", "Postgres://")
+        env = {"SUPABASE_DB_URL": url, "SUPABASE_PROJECT_REF": REF, "INPUT_PROJECT_REF": REF}
+        code, output = self.run_main(["check-db-url"], env)
+        self.assertEqual(code, 1)
+        self.assertIn("scheme", output)
+        self.assertNotIn(SECRET, output)
 
     def test_check_context_uses_environment(self):
         env = {"GITHUB_REF": "refs/heads/main", "INPUT_MAIN_SHA": SHA, "GITHUB_SHA": SHA,
@@ -1005,14 +1290,75 @@ class AutoCommandLineTests(unittest.TestCase):
             ({"SUPABASE_DB_URL": GOOD_URL.replace("sslmode=require", "sslmode=disable")}, "sslmode"),
             ({"SUPABASE_DB_URL": GOOD_URL.replace(".supabase.co:", ".supabase.co.evil.example:")}, "host"),
             ({"SUPABASE_DB_URL": GOOD_URL + "&host=evil.example"}, "query"),
+            ({"SUPABASE_DB_URL": GOOD_URL.replace("postgresql://", "POSTGRESQL://")}, "scheme"),
+            ({"SUPABASE_DB_URL": " " + GOOD_URL}, "scheme"),
+            ({"PGSERVICE": f"evil-{SECRET}"}, "PGSERVICE"),
+            ({"PGSERVICEFILE": f"/tmp/evil-{SECRET}.conf"}, "PGSERVICEFILE"),
+            ({"PGSERVICE": ""}, "PGSERVICE"),
         )
         for overrides, message in cases:
-            with self.subTest(overrides=overrides):
+            # Keys only: a failing subtest label must never print the sentinel secret.
+            with self.subTest(overrides=sorted(overrides), message=message):
                 code, output = self.run_main(["check-auto-config"], self.config_env(**overrides))
                 self.assertEqual(code, 1)
                 self.assertIn("::error::", output)
                 self.assertIn(message, output)
                 self.assertNotIn(SECRET, output)
+
+    def pooler_env(self, **overrides):
+        ca_path = Path(self.folder, *CA_RELATIVE.split("/"))
+        ca_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(CA_FILE, ca_path)
+        env = {"SUPABASE_DB_URL": POOLER_URL, "GITHUB_WORKSPACE": self.folder,
+               "PGSSLROOTCERT": f"{self.folder}/{CA_RELATIVE}"}
+        env.update(overrides)
+        return self.config_env(**env)
+
+    def test_check_auto_config_accepts_session_pooler_with_pinned_ca(self):
+        code, output = self.run_main(["check-auto-config"], self.pooler_env())
+        self.assertEqual(code, 0, output)
+        self.assertIn("session pooler with verify-full TLS and the pinned CA", output)
+        self.assertNotIn("direct host", output)
+        self.assertNotIn(SECRET, output)
+        self.assertNotIn(POOLER_HOST, output)
+
+    def test_check_auto_config_direct_route_needs_no_pinned_ca(self):
+        code, output = self.run_main(["check-auto-config"], self.config_env(GITHUB_WORKSPACE=None, PGSSLROOTCERT=None))
+        self.assertEqual(code, 0, output)
+        self.assertIn("direct host with TLS", output)
+
+    def test_check_auto_config_pooler_fails_closed_without_the_pinned_ca(self):
+        tampered = Path(self.folder, "tampered")
+        tampered.mkdir()
+        tampered_ca = Path(tampered, *CA_RELATIVE.split("/"))
+        tampered_ca.parent.mkdir(parents=True)
+        tampered_ca.write_text(CA_FILE.read_text(encoding="ascii").replace("M", "N", 1), encoding="ascii")
+        cases = (
+            ({"PGSSLROOTCERT": None}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": str(CA_FILE)}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": f"/tmp/{SECRET}/evil.crt"}, "PGSSLROOTCERT"),
+            ({"GITHUB_WORKSPACE": None}, "GITHUB_WORKSPACE"),
+            ({"GITHUB_WORKSPACE": str(tampered), "PGSSLROOTCERT": f"{tampered}/{CA_RELATIVE}"}, "does not match"),
+            ({"GITHUB_WORKSPACE": str(Path(self.folder, "empty")),
+              "PGSSLROOTCERT": f"{Path(self.folder, 'empty')}/{CA_RELATIVE}"}, "missing"),
+            ({"SUPABASE_DB_URL": POOLER_URL.replace("verify-full", "require")}, "verify-full"),
+            ({"SUPABASE_DB_URL": POOLER_URL.replace(":5432/", ":6543/")}, "session port"),
+            ({"SUPABASE_DB_URL": POOLER_URL + "&sslrootcert=/tmp/evil.crt"}, "query"),
+            ({"SUPABASE_PROJECT_REF": OTHER_REF}, "postgres.<project ref>"),
+            ({"SUPABASE_DB_URL": POOLER_URL.replace("postgresql://", "Postgres://")}, "scheme"),
+            ({"SUPABASE_DB_URL": "\t" + POOLER_URL}, "scheme"),
+            ({"PGSERVICE": "evil"}, "PGSERVICE"),
+            ({"PGSERVICEFILE": "/tmp/evil.conf"}, "PGSERVICEFILE"),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=sorted(overrides)):
+                code, output = self.run_main(["check-auto-config"], self.pooler_env(**overrides))
+                self.assertEqual(code, 1)
+                self.assertIn("::error::", output)
+                self.assertIn(message, output)
+                self.assertNotIn(SECRET, output)
+                self.assertNotIn("evil", output)
+                self.assertNotIn(POOLER_HOST, output)
 
     # check-main-head ------------------------------------------------------
 

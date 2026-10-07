@@ -1,18 +1,102 @@
 ALTER TABLE public.courts
- ADD COLUMN surface_type text NULL,
- ADD COLUMN is_indoor boolean NOT NULL DEFAULT false;
+ ADD COLUMN IF NOT EXISTS surface_type text NULL,
+ ADD COLUMN IF NOT EXISTS is_indoor boolean NOT NULL DEFAULT false;
 
-CREATE TABLE public.court_sports (
+CREATE TABLE IF NOT EXISTS public.court_sports (
  court_id uuid NOT NULL REFERENCES public.courts(id) ON DELETE CASCADE,
  sport_id uuid NOT NULL REFERENCES public.sports(id) ON DELETE RESTRICT,
  PRIMARY KEY (court_id, sport_id)
 );
-CREATE INDEX court_sports_sport_id_idx ON public.court_sports(sport_id);
+CREATE INDEX IF NOT EXISTS court_sports_sport_id_idx ON public.court_sports(sport_id);
 ALTER TABLE public.court_sports ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Service role full access" ON public.court_sports TO service_role USING (true) WITH CHECK (true);
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.court_sports TO service_role;
+DO $$
+BEGIN
+ IF NOT EXISTS (
+  SELECT 1 FROM pg_policy
+  WHERE polrelid = 'public.court_sports'::regclass AND polname = 'Service role full access'
+ ) THEN
+  CREATE POLICY "Service role full access" ON public.court_sports TO service_role USING (true) WITH CHECK (true);
+ END IF;
+END $$;
+-- Hosted default privileges grant new public tables to every API role, and RLS
+-- does not govern TRUNCATE; drop them and keep only the RPC's DML for service_role.
+REVOKE ALL ON TABLE public.court_sports FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.court_sports TO service_role;
 
-CREATE FUNCTION public.save_complex_with_courts(p_complex_id uuid, p_organization_id uuid, p_complex jsonb, p_courts jsonb, p_delete_court_ids uuid[])
+-- IF NOT EXISTS skips objects that already exist, so fail closed when a reused
+-- name differs from this migration, including extra constraints, indexes or policies.
+DO $$
+DECLARE
+ previous_path text := current_setting('search_path');
+ drift text;
+BEGIN
+ -- Render catalog definitions fully qualified for this comparison only.
+ PERFORM set_config('search_path', 'pg_catalog', true);
+ WITH expected(item) AS (VALUES
+  ('public.courts columns: surface_type text, is_indoor boolean not null default false'),
+  ('public.court_sports columns: court_id uuid not null, sport_id uuid not null'),
+  ('public.court_sports PRIMARY KEY (court_id, sport_id)'),
+  ('public.court_sports FOREIGN KEY (court_id) REFERENCES public.courts(id) ON DELETE CASCADE'),
+  ('public.court_sports FOREIGN KEY (sport_id) REFERENCES public.sports(id) ON DELETE RESTRICT'),
+  ('CREATE INDEX court_sports_sport_id_idx ON public.court_sports USING btree (sport_id)'),
+  ('public.court_sports rls true'),
+  ('public.court_sports policy "Service role full access" permissive * {service_role} using true check true'),
+  ('public.court_sports acl service_role DELETE, service_role INSERT, service_role SELECT, service_role UPDATE')
+ ), actual(item) AS (
+  SELECT format('%s columns: %s', a.attrelid::regclass, string_agg(
+          format('%s %s', a.attname, format_type(a.atttypid, a.atttypmod))
+          || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END
+          || coalesce(' default ' || pg_get_expr(d.adbin, d.adrelid), ''),
+          ', ' ORDER BY a.attnum))
+  FROM pg_attribute a
+  LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+  WHERE a.attnum > 0 AND NOT a.attisdropped
+    AND (a.attrelid = 'public.court_sports'::regclass
+         OR (a.attrelid = 'public.courts'::regclass AND a.attname IN ('surface_type', 'is_indoor')))
+  GROUP BY a.attrelid
+  UNION ALL
+  SELECT format('%s %s', c.conrelid::regclass, pg_get_constraintdef(c.oid))
+  FROM pg_constraint c WHERE c.conrelid = 'public.court_sports'::regclass
+  UNION ALL
+  SELECT pg_get_indexdef(i.indexrelid)
+  FROM pg_index i WHERE i.indrelid = 'public.court_sports'::regclass AND NOT i.indisprimary
+  UNION ALL
+  SELECT format('%s rls %s', t.oid::regclass, t.relrowsecurity::text)
+  FROM pg_class t WHERE t.oid = 'public.court_sports'::regclass
+  UNION ALL
+  SELECT format('%s policy %I %s %s %s using %s check %s', p.polrelid::regclass, p.polname,
+          CASE WHEN p.polpermissive THEN 'permissive' ELSE 'restrictive' END, p.polcmd,
+          p.polroles::regrole[], pg_get_expr(p.polqual, p.polrelid),
+          pg_get_expr(p.polwithcheck, p.polrelid))
+  FROM pg_policy p WHERE p.polrelid = 'public.court_sports'::regclass
+  UNION ALL
+  -- Non-owner table privileges; the owner keeps its implicit maintenance rights.
+  SELECT format('%s acl %s', t.oid::regclass, coalesce((
+          SELECT string_agg(g.item, ', ' ORDER BY g.item)
+          FROM (SELECT format('%s %s%s',
+                 CASE WHEN e.grantee = 0 THEN 'PUBLIC' ELSE e.grantee::regrole::text END,
+                 e.privilege_type, CASE WHEN e.is_grantable THEN ' grantable' ELSE '' END)
+                FROM aclexplode(coalesce(t.relacl, acldefault('r', t.relowner))) e
+                WHERE e.grantee <> t.relowner) g(item)), 'none'))
+  FROM pg_class t WHERE t.oid = 'public.court_sports'::regclass
+  UNION ALL
+  SELECT format('%s column %s acl %s', a.attrelid::regclass, a.attname, a.attacl)
+  FROM pg_attribute a
+  WHERE a.attrelid = 'public.court_sports'::regclass AND cardinality(a.attacl) > 0
+ )
+ SELECT string_agg(item, '; ') INTO drift
+ FROM ((SELECT item FROM expected EXCEPT ALL SELECT item FROM actual)
+       UNION ALL
+       (SELECT item FROM actual EXCEPT ALL SELECT item FROM expected)) mismatch;
+ PERFORM set_config('search_path', previous_path, true);
+ IF drift IS NOT NULL THEN
+  RAISE EXCEPTION 'court schema drift: %', drift;
+ END IF;
+END $$;
+
+-- Replacing keeps the exact signature, SECURITY INVOKER and search_path; a changed
+-- return type or parameter name fails, and the grants below are reasserted.
+CREATE OR REPLACE FUNCTION public.save_complex_with_courts(p_complex_id uuid, p_organization_id uuid, p_complex jsonb, p_courts jsonb, p_delete_court_ids uuid[])
 RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $$
 DECLARE
  court jsonb;

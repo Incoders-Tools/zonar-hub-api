@@ -4,8 +4,11 @@ Standard library only; no network, database or secrets. Run with:
 python -m unittest discover -s supabase/tests -p "test_*.py"
 """
 
+import base64
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -14,10 +17,43 @@ import unittest
 from pathlib import Path
 
 from test_verify_migration_plan import (
-    APPLY_STEP, CI_REPO, CONFIG_STEP, DB_STEPS, DEPLOY_JOB, DEPLOY_WORKFLOW, DRY_RUN_STEP, GOOD_URL,
-    HISTORY_STEP, OTHER_REF, OTHER_SHA, PLAN_STEP, REBIND_AFTER_GATE, REBIND_BEFORE_APPLY, REF, REPO_ROOT,
-    SECRET, SHA, VERIFY_STEP, _posix, ci_run, dry_run, job_blocks, rows, run_script, step_block, up_to_date,
-    vmp)
+    APPLY_STEP, CA_FILE, CA_RELATIVE, CI_REPO, CONFIG_STEP, DB_SECRET_ENV, DB_STEPS, DEPLOY_JOB, DEPLOY_STEPS,
+    DEPLOY_WORKFLOW, DRY_RUN_STEP, GOOD_URL, HISTORY_STEP, OTHER_REF, OTHER_SHA, PLAN_STEP, POOLER_HOST,
+    POOLER_URL, REBIND_AFTER_GATE, REBIND_BEFORE_APPLY, REF, REPO_ROOT, SECRET, SHA, VERIFY_STEP, _posix, ci_run,
+    dry_run, job_blocks, rows, run_script, step_block, strip_comments, up_to_date, vmp)
+
+README = REPO_ROOT / "supabase" / "README-migration-delivery.md"
+# Recorded independently of the planner so a changed constant cannot pass silently.
+CA_DER_SHA256 = "807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa"
+CA_ENV = "          PGSSLROOTCERT: ${{ github.workspace }}/" + CA_RELATIVE + "\n"
+# GitHub sets GITHUB_WORKSPACE to the checkout directory; the harness runs steps there.
+WORKSPACE = _posix(REPO_ROOT)
+CLI_CALLS = [
+    'supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json \\',
+    'supabase db push --dry-run --db-url "$SUPABASE_DB_URL" \\',
+    'supabase db push --yes --db-url "$SUPABASE_DB_URL" \\',
+    'supabase migration list --db-url "$SUPABASE_DB_URL" --output-format json \\',
+]
+
+
+def step_env(step, url):
+    """Returns a step's `env:` mapping with its expressions resolved as the runner would.
+
+    Only the expressions the deploy job is allowed to use are known; any other one
+    fails the test instead of silently reaching a script.
+    """
+    match = re.search(r"(?m)^        env:\n((?:^          .*\n)+)", step)
+    expressions = {"${{ secrets.SUPABASE_DB_URL }}": url, "${{ github.workspace }}": WORKSPACE,
+                   "${{ github.token }}": "fake-token"}
+    env = {}
+    for line in match.group(1).splitlines() if match else ():
+        key, _, value = line.strip().partition(": ")
+        for expression, resolved in expressions.items():
+            value = value.replace(expression, resolved)
+        if "${{" in value:
+            raise AssertionError(f"unexpected expression in {key}")
+        env[key] = value
+    return env
 
 
 def run_bash_step(script, temp, fakes, env):
@@ -38,7 +74,7 @@ def run_bash_step(script, temp, fakes, env):
         (bin_dir / name).write_text("#!/bin/sh\n" + body, encoding="utf-8", newline="\n")
         (bin_dir / name).chmod(0o755)
     environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("GITHUB_", "GH_", "SUPABASE_", "RUNNER_"))}
+                   if not key.startswith(("GITHUB_", "GH_", "SUPABASE_", "RUNNER_", "PG"))}
     environment.update({"RUNNER_TEMP": _posix(temp), "GH_TOKEN": "fake-token",
                         "GH_CONFIG_DIR": _posix(config_dir), "GH_HOST": "gh-host.invalid"})
     environment.update(env)
@@ -61,6 +97,7 @@ def fake_supabase(state):
     """
     s = _posix(state)
     return (f'printf "%s\\n" "$*" >> "{s}/supabase.log"\n'
+            f'printf "%s\\n" "${{PGSSLROOTCERT-unset}}" >> "{s}/ca.log"\n'
             'case "$*" in\n'
             f'  "migration list "*) [ -f "{s}/list-fails" ] && {{ echo "dial $SUPABASE_DB_URL" >&2; exit 1; }}\n'
             f'    cat "{s}/list.json" ;;\n'
@@ -98,8 +135,10 @@ class AutoDeployScriptTests(unittest.TestCase):
         (self.temp / "event.json").write_text(json.dumps({"workflow_run": ci_run()}), encoding="utf-8")
         self.remote_main = SHA
         self.checkout = SHA
+        self.url = GOOD_URL
         self.job_env = {"SUPABASE_PROJECT_REF": REF, "SUPABASE_APPROVED_BASELINE": self.versions[0],
                         "GITHUB_OUTPUT": _posix(self.output), "GITHUB_REPOSITORY": CI_REPO,
+                        "GITHUB_WORKSPACE": WORKSPACE,
                         "GITHUB_EVENT_PATH": _posix(self.temp / "event.json")}
 
     def prepare(self, remote, dry_log, after=None, fail=()):
@@ -128,11 +167,13 @@ class AutoDeployScriptTests(unittest.TestCase):
             "git": f'[ "$*" = "rev-parse HEAD" ] && printf "%s\\n" "{self.checkout}"\n',
             "supabase": fake_supabase(self.state),
         }
-        environment = {**self.job_env, **({"SUPABASE_DB_URL": GOOD_URL} if name in DB_STEPS else {}), **env}
-        completed = run_bash_step(run_script(step_block(self.deploy, name)), self.temp, fakes,
+        block = step_block(self.deploy, name)
+        environment = {**self.job_env, **step_env(block, self.url), **env}
+        completed = run_bash_step(run_script(block), self.temp, fakes,
                                   {key: value for key, value in environment.items() if value is not None})
         output = completed.stdout + completed.stderr
         self.assertNotIn(SECRET, output)
+        self.assertNotIn(POOLER_HOST, output)
         self.assertNotIn("Applying migration", output)
         return completed
 
@@ -293,6 +334,116 @@ class AutoDeployScriptTests(unittest.TestCase):
                 self.assertEqual(completed.returncode, 1)
                 self.assertIn(message, completed.stderr)
         self.assertEqual(self.log("supabase.log"), [])
+
+    def test_config_accepts_the_session_pooler_with_the_workflow_pinned_ca(self):
+        self.url = POOLER_URL
+        completed = self.step(CONFIG_STEP)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("session pooler with verify-full TLS and the pinned CA", completed.stdout)
+        cases = (
+            ({"PGSSLROOTCERT": None}, "PGSSLROOTCERT"),
+            ({"PGSSLROOTCERT": f"{WORKSPACE}/supabase/certs/other.crt"}, "PGSSLROOTCERT"),
+            ({"GITHUB_WORKSPACE": None}, "GITHUB_WORKSPACE"),
+            ({"GITHUB_WORKSPACE": _posix(self.temp)}, "PGSSLROOTCERT"),
+        )
+        for env, message in cases:
+            with self.subTest(env=env):
+                completed = self.step(CONFIG_STEP, **env)
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn(message, completed.stderr)
+        self.assertEqual(self.log("supabase.log"), [])
+
+    def test_config_rejects_connection_services_on_both_routes_before_the_cli(self):
+        for url in (GOOD_URL, POOLER_URL):
+            for name, value in (("PGSERVICE", "evil"), ("PGSERVICEFILE", "/tmp/evil.conf"), ("PGSERVICE", "")):
+                with self.subTest(pooler=url == POOLER_URL, name=name, value=value):
+                    self.url = url
+                    completed = self.step(CONFIG_STEP, **{name: value})
+                    self.assertEqual(completed.returncode, 1)
+                    self.assertIn(name, completed.stderr)
+        self.assertEqual(self.log("supabase.log"), [])
+
+    def test_every_cli_call_receives_the_pinned_ca_from_the_workspace(self):
+        for url in (POOLER_URL, GOOD_URL):
+            with self.subTest(pooler=url == POOLER_URL):
+                for leftover in ("supabase.log", "ca.log"):
+                    (self.state / leftover).unlink(missing_ok=True)
+                self.output.write_text("", encoding="utf-8")
+                self.url = url
+                self.prepare(self.versions[:-1], dry_run(self.files[-1:]))
+                ran = self.run_flow()
+                self.assertEqual(list(ran)[-1], VERIFY_STEP)
+                self.assertEqual(ran[VERIFY_STEP].returncode, 0, ran[VERIFY_STEP].stderr)
+                self.assertEqual(len(self.log("supabase.log")), 4)
+                self.assertEqual(self.log("ca.log"), [f"{WORKSPACE}/{CA_RELATIVE}"] * 4)
+
+
+class PinnedCaWorkflowTests(unittest.TestCase):
+    """Static checks that the deploy job hands the committed CA to exactly the database steps."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = strip_comments(DEPLOY_WORKFLOW.read_text(encoding="utf-8"))
+        cls.deploy = job_blocks(cls.text)[DEPLOY_JOB]
+
+    def test_committed_ca_is_a_single_certificate_with_the_pinned_der_digest(self):
+        self.assertFalse(CA_FILE.is_symlink())
+        self.assertTrue(CA_FILE.is_file())
+        text = CA_FILE.read_text(encoding="ascii")
+        self.assertEqual(text.count("-----BEGIN CERTIFICATE-----"), 1)
+        self.assertNotIn("PRIVATE KEY", text)
+        body = text.split("-----BEGIN CERTIFICATE-----")[1].split("-----END CERTIFICATE-----")[0]
+        der = base64.b64decode("".join(body.split()), validate=True)
+        self.assertEqual(hashlib.sha256(der).hexdigest(), CA_DER_SHA256)
+        self.assertEqual(vmp.POOLER_CA_DER_SHA256, CA_DER_SHA256)
+        self.assertEqual(vmp.POOLER_CA_RELATIVE_PATH, CA_RELATIVE)
+
+    def test_exactly_the_database_steps_receive_the_secret_and_the_pinned_ca(self):
+        for name in DEPLOY_STEPS:
+            step = step_block(self.deploy, name)
+            with self.subTest(step=name):
+                if name in DB_STEPS:
+                    env = re.search(r"(?m)^        env:\n((?:^          .*\n)+)", step).group(1)
+                    self.assertEqual(env, DB_SECRET_ENV + CA_ENV)
+                else:
+                    for forbidden in ("SUPABASE_DB_URL", "PGSSLROOTCERT", "github.workspace", "secrets."):
+                        self.assertNotIn(forbidden, step)
+        self.assertEqual(len(re.findall(r"PGSSLROOTCERT", self.text)), len(DB_STEPS))
+        self.assertEqual(len(re.findall(r"github\.workspace", self.text)), len(DB_STEPS))
+
+    def test_no_other_libpq_variable_or_runtime_environment_file_is_set(self):
+        # A service, host or TLS override could replace what check-auto-config proved,
+        # and GITHUB_ENV would let one step change the environment of later steps.
+        self.assertEqual(re.findall(r"\bPG[A-Z]+", self.text), ["PGSSLROOTCERT"] * len(DB_STEPS))
+        self.assertNotIn("GITHUB_ENV", self.text)
+
+    def test_cli_invocations_are_unchanged(self):
+        self.assertEqual(re.findall(r"(?m)^          if ! (supabase .*)$", self.deploy), CLI_CALLS)
+
+
+class ReadmeConnectionTests(unittest.TestCase):
+    """The runbook's connection examples must pass the real validator with placeholder values."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = README.read_text(encoding="utf-8")
+
+    def test_connection_examples_validate_on_both_routes_without_real_credentials(self):
+        examples = re.findall(r"`(postgresql://[^`]+)`", self.text)
+        self.assertEqual(len(examples), 2)
+        routes = []
+        for example in examples:
+            with self.subTest(example=example):
+                self.assertIn(":<percent-encoded-password>@", example)
+                url = example.replace("<ref>", REF).replace("<percent-encoded-password>", "placeholder-only")
+                routes.append(vmp.validate_db_url(url, REF))
+        self.assertEqual(sorted(routes), sorted([vmp.DIRECT_ROUTE, vmp.POOLER_ROUTE]))
+
+    def test_runbook_records_the_pooler_and_ca_facts_the_validator_enforces(self):
+        for fragment in (vmp.POOLER_HOST, CA_RELATIVE, CA_DER_SHA256, "postgres.<ref>", "6543", "IPv6",
+                         "PGSSLROOTCERT", "verify-full", "PGSERVICE"):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, self.text)
 
 
 if __name__ == "__main__":

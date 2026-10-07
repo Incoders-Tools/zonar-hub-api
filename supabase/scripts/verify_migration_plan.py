@@ -8,12 +8,12 @@ messages never include the database URL or any part of its credentials.
 Subcommands:
   check-inputs    validate operator dispatch inputs (no secrets involved)
   check-context   bind the run to refs/heads/main and the dispatched main SHA
-  check-db-url    validate SUPABASE_DB_URL against the approved project ref
+  check-db-url    validate SUPABASE_DB_URL (and the pinned CA for the pooler) against the project ref
   check-plan      compare manifest, remote history, dry run and approved list
   verify-applied  confirm the remote history after `supabase db push`
   check-ci-promotion   prove main is a green CI run of a merged dev to main PR
   check-main-head      re-bind the CI head SHA to the checkout and current main head
-  check-auto-config    validate project ref, baseline and SUPABASE_DB_URL (no inputs)
+  check-auto-config    validate project ref, baseline, SUPABASE_DB_URL and pooler CA (no inputs)
   auto-plan            derive pending migrations and write GITHUB_OUTPUT values
   verify-auto-applied  confirm the remote history equals the full local manifest
 
@@ -24,6 +24,9 @@ CI push to main. The first five are not referenced by any workflow.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -45,6 +48,14 @@ DRY_RUN_UP_TO_DATE = "Remote database is up to date."
 # notices, DRY RUN banner, Connecting, update notice) contains none of them.
 DRY_RUN_DIAGNOSTIC = re.compile(r"\b(?:error|fatal|panic|failed)\b", re.IGNORECASE)
 TLS_MODES = {"require", "verify-ca", "verify-full"}
+# Supabase CLI (pgconn v5) parses a URL only for these exact, case-sensitive raw
+# prefixes; any other spelling is read as keyword/value with sslmode=prefer.
+URL_PREFIXES = ("postgres://", "postgresql://")
+# urlsplit silently strips leading C0/space and embedded tab/CR/LF; pgconn does not.
+URL_FORBIDDEN_CHARACTER = re.compile(r"[\x00-\x20\x7f]")
+# pgconn merges service-file settings over the environment, so a service could
+# replace PGSSLROOTCERT and the other TLS settings after this preflight passed.
+SERVICE_VARIABLES = ("PGSERVICE", "PGSERVICEFILE")
 # Only these libpq query parameters are allowed; host/hostaddr/port/service
 # overrides could silently redirect the connection away from the checked host.
 ALLOWED_QUERY_KEYS = {"sslmode", "connect_timeout"}
@@ -53,6 +64,20 @@ DIRECT_PORT = 5432
 # database; pooler-style users such as `postgres.<ref>` are rejected.
 DIRECT_USER = "postgres"
 DIRECT_DATABASE_PATH = "/postgres"
+# The IPv4 session pooler is accepted in exactly one shape: this DNS name on the
+# session port, user postgres.<ref> and sslmode=verify-full. DNS only, because the
+# pinned Supabase CLI skips hostname verification for IP literal targets.
+POOLER_HOST = "aws-1-us-east-2.pooler.supabase.com"
+POOLER_PORT = 5432
+POOLER_TLS_MODE = "verify-full"
+POOLER_TIMEOUT = re.compile(r"^[1-9][0-9]{0,2}$")
+DIRECT_ROUTE = "direct"
+POOLER_ROUTE = "pooler"
+# Public Supabase Root 2021 CA committed for the pooler. The pin is the DER digest so
+# checkout line-ending conversion cannot change it; PGSSLROOTCERT must name this file.
+POOLER_CA_RELATIVE_PATH = "supabase/certs/prod-ca-2021.crt"
+POOLER_CA_DER_SHA256 = "807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa"
+PEM_CERTIFICATE = re.compile(r"-----BEGIN CERTIFICATE-----([A-Za-z0-9+/=\s]+)-----END CERTIFICATE-----\s*")
 # The only workflow whose push run on main may authorize a production apply.
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -260,11 +285,44 @@ def validate_project_ref(project_ref: str) -> None:
         raise PlanError("Supabase project ref must be 20 lowercase alphanumeric characters.")
 
 
-def validate_db_url(url: str, project_ref: str) -> None:
-    """Requires the direct postgres database on db.<ref>.supabase.co with TLS; never echoes the URL."""
+def _validate_pooler_url(url: str, netloc: str, path: str, query: str, project_ref: str) -> None:
+    """Checks the raw session pooler URL so no case, encoding or alias variant slips through."""
+    if any(not "!" <= char <= "~" for char in url) or "#" in url or url.count("@") != 1:
+        raise PlanError("SUPABASE_DB_URL session pooler URL contains unsupported characters or delimiters.")
+    userinfo, _, authority = netloc.rpartition("@")
+    if authority != f"{POOLER_HOST}:{POOLER_PORT}":
+        raise PlanError("SUPABASE_DB_URL must use the exact session pooler host and session port 5432.")
+    user, separator, password = userinfo.partition(":")
+    if user != f"postgres.{project_ref}" or not separator or not password:
+        raise PlanError("SUPABASE_DB_URL session pooler must authenticate as postgres.<project ref> with a password.")
+    if path != DIRECT_DATABASE_PATH:
+        raise PlanError("SUPABASE_DB_URL must target the postgres database.")
+    # Raw parsing: decoded or repeated values must never reach libpq unchecked.
+    pairs = [item.partition("=") for item in query.split("&")] if query else []
+    keys = [key for key, _, _ in pairs]
+    if (any(not separator or key not in ALLOWED_QUERY_KEYS or "%" in value or "+" in value
+            for key, separator, value in pairs) or len(set(keys)) != len(keys)):
+        raise PlanError("SUPABASE_DB_URL contains unsupported or repeated query parameters.")
+    values = {key: value for key, _, value in pairs}
+    if values.get("sslmode") != POOLER_TLS_MODE:
+        raise PlanError("SUPABASE_DB_URL session pooler must set sslmode=verify-full.")
+    if "connect_timeout" in values and not POOLER_TIMEOUT.match(values["connect_timeout"]):
+        raise PlanError("SUPABASE_DB_URL connect_timeout must be 1 to 999 seconds.")
+
+
+def validate_db_url(url: str, project_ref: str) -> str:
+    """Returns the validated route; never echoes the URL.
+
+    The direct route is the postgres database on db.<ref>.supabase.co with TLS. The
+    pooler route is the exact IPv4 session pooler with verify-full TLS; callers must
+    also prove the pinned CA with `validate_pinned_ca`.
+    """
     validate_project_ref(project_ref)
     if not url:
         raise PlanError("SUPABASE_DB_URL is missing.")
+    if not url.startswith(URL_PREFIXES) or URL_FORBIDDEN_CHARACTER.search(url):
+        raise PlanError("SUPABASE_DB_URL must start with the exact lowercase postgresql:// or postgres:// scheme "
+                        "and contain no whitespace or control characters.")
     try:
         parts = urlsplit(url)
         port = parts.port
@@ -272,12 +330,13 @@ def validate_db_url(url: str, project_ref: str) -> None:
     except ValueError:
         # Suppress the parser exception: its message may quote the URL.
         raise PlanError("SUPABASE_DB_URL is not a valid connection URL.") from None
-    if parts.scheme not in ("postgres", "postgresql"):
-        raise PlanError("SUPABASE_DB_URL must use the postgresql scheme.")
     if parts.fragment or "," in parts.netloc:
         raise PlanError("SUPABASE_DB_URL must target exactly one host.")
+    if parts.hostname == POOLER_HOST:
+        _validate_pooler_url(url, parts.netloc, parts.path, parts.query, project_ref)
+        return POOLER_ROUTE
     if parts.hostname != f"db.{project_ref}.supabase.co":
-        raise PlanError("SUPABASE_DB_URL host is not the direct database host of the project.")
+        raise PlanError("SUPABASE_DB_URL host is neither the direct database host nor the approved session pooler.")
     if port not in (None, DIRECT_PORT):
         raise PlanError("SUPABASE_DB_URL must use the direct database port 5432.")
     if username != DIRECT_USER or not password:
@@ -290,6 +349,48 @@ def validate_db_url(url: str, project_ref: str) -> None:
         raise PlanError("SUPABASE_DB_URL contains unsupported or repeated query parameters.")
     if dict(query).get("sslmode") not in TLS_MODES:
         raise PlanError("SUPABASE_DB_URL must set sslmode=require or stronger.")
+    return DIRECT_ROUTE
+
+
+def validate_pinned_ca(env: Mapping[str, str]) -> None:
+    """Requires PGSSLROOTCERT to name the committed CA under GITHUB_WORKSPACE with the pinned digest.
+
+    The file must hold exactly one PEM certificate, so no extra trust anchor or key
+    can ride along. Messages never echo paths or file content.
+    """
+    workspace = env.get("GITHUB_WORKSPACE", "")
+    if not workspace or any(ord(char) < 32 for char in workspace) or not os.path.isabs(workspace):
+        raise PlanError("GITHUB_WORKSPACE must be an absolute path without control characters.")
+    expected = f"{workspace}/{POOLER_CA_RELATIVE_PATH}"
+    if env.get("PGSSLROOTCERT", "") != expected:
+        raise PlanError("PGSSLROOTCERT must point to the pinned CA certificate in the workspace.")
+    path = Path(expected)
+    if path.is_symlink() or not path.is_file():
+        raise PlanError("Pinned CA certificate file is missing or not a regular file.")
+    try:
+        text = path.read_text(encoding="ascii")
+    except (OSError, ValueError):
+        raise PlanError("Pinned CA certificate file is unreadable.") from None
+    match = PEM_CERTIFICATE.fullmatch(text)
+    try:
+        der = base64.b64decode("".join(match.group(1).split()), validate=True) if match else b""
+    except binascii.Error:
+        der = b""
+    if not der:
+        raise PlanError("Pinned CA certificate file must contain exactly one PEM certificate.")
+    if hashlib.sha256(der).hexdigest() != POOLER_CA_DER_SHA256:
+        raise PlanError("Pinned CA certificate does not match the approved Supabase Root 2021 CA.")
+
+
+def _check_db_config(env: Mapping[str, str], project_ref: str) -> str:
+    """Validates SUPABASE_DB_URL plus the pooler CA and returns a value-free route description."""
+    present = [name for name in SERVICE_VARIABLES if name in env]
+    if present:
+        raise PlanError(f"{' and '.join(present)} must not be set; a connection service could override TLS settings.")
+    if validate_db_url(env.get("SUPABASE_DB_URL", ""), project_ref) == POOLER_ROUTE:
+        validate_pinned_ca(env)
+        return "the approved session pooler with verify-full TLS and the pinned CA"
+    return "the approved direct host with TLS"
 
 
 def validate_context(ref: str, input_sha: str, workflow_sha: str, checkout_sha: str, remote_main_sha: str) -> None:
@@ -473,8 +574,8 @@ def _run_auto(args: argparse.Namespace, env: Mapping[str, str]) -> None:
         return
     if args.command == "check-auto-config":
         _read_baseline(env)
-        validate_db_url(env.get("SUPABASE_DB_URL", ""), env.get("SUPABASE_PROJECT_REF", ""))
-        print("Environment configuration valid; database URL targets the approved direct host with TLS.")
+        target = _check_db_config(env, env.get("SUPABASE_PROJECT_REF", ""))
+        print(f"Environment configuration valid; database URL targets {target}.")
         return
     # Output trust is settled before any CLI file is read so a failure can never leave
     # a half-validated plan behind; outputs are written only after full validation.
@@ -517,8 +618,7 @@ def _run(args: argparse.Namespace, env: Mapping[str, str]) -> None:
         project_ref = env.get("SUPABASE_PROJECT_REF", "")
         if not project_ref or env.get("INPUT_PROJECT_REF", "") != project_ref:
             raise PlanError("project_ref input does not match the environment SUPABASE_PROJECT_REF.")
-        validate_db_url(env.get("SUPABASE_DB_URL", ""), project_ref)
-        print("Database URL targets the approved direct host with TLS.")
+        print(f"Database URL targets {_check_db_config(env, project_ref)}.")
     else:
         expected = parse_expected_versions(env.get("EXPECTED_PENDING_VERSIONS", ""))
         baseline = _read_baseline(env)
