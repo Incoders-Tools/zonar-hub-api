@@ -126,12 +126,68 @@ ROLLBACK;
 SQL
 }
 
+# court_sports is reached only by the service-role RPC: service_role holds plain
+# DML (not TRUNCATE), anon/authenticated hold nothing. Synthetic UUIDs only.
+probe_court_sports_privileges() {
+  docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres <<'SQL'
+BEGIN;
+DO $$
+DECLARE
+    probe record;
+    allowed boolean;
+BEGIN
+    FOR probe IN
+        SELECT role_name, privilege
+          FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) role_name,
+               unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN']) privilege
+    LOOP
+        IF has_table_privilege(probe.role_name, 'public.court_sports', probe.privilege)
+           IS DISTINCT FROM (probe.role_name = 'service_role'
+               AND probe.privilege IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE')) THEN
+            RAISE EXCEPTION 'public.court_sports % privilege for % is %', probe.privilege, probe.role_name,
+                has_table_privilege(probe.role_name, 'public.court_sports', probe.privilege);
+        END IF;
+    END LOOP;
+    FOR probe IN
+        SELECT role_name, statement, role_name = 'service_role' AND statement NOT LIKE 'TRUNCATE%' AS expected
+          FROM unnest(ARRAY['service_role', 'anon', 'authenticated']) role_name,
+               unnest(ARRAY[
+                   'SELECT 1 FROM public.court_sports',
+                   'INSERT INTO public.court_sports (court_id, sport_id) VALUES '
+                   || '(''c0000000-0000-0000-0000-000000000001'', ''c0000000-0000-0000-0000-000000000002'')',
+                   'UPDATE public.court_sports SET sport_id = sport_id',
+                   'DELETE FROM public.court_sports',
+                   'TRUNCATE public.court_sports']) statement
+    LOOP
+        BEGIN
+            EXECUTE format('SET LOCAL ROLE %I', probe.role_name);
+            EXECUTE probe.statement;
+            allowed := true;
+        EXCEPTION
+            WHEN insufficient_privilege THEN
+                allowed := false;
+            -- The privilege check passed; only the synthetic row's foreign keys failed.
+            WHEN foreign_key_violation THEN
+                allowed := true;
+        END;
+        RESET ROLE;
+        IF allowed IS DISTINCT FROM probe.expected THEN
+            RAISE EXCEPTION 'court_sports % for %: allowed=%, expected=%',
+                probe.statement, probe.role_name, allowed, probe.expected;
+        END IF;
+    END LOOP;
+END $$;
+ROLLBACK;
+SQL
+}
+
 # Hosted Supabase grants every new public table to the API roles by default.
-# Emulate that only around the first apply of the impersonation migration, so
-# the other files keep their explicit limited-grant signal.
+# Emulate that only around the first apply of the two migrations that create
+# tables, so the other files keep their explicit limited-grant signal.
 for migration in supabase/migrations/*.sql; do
   hosted_defaults=false
-  if [[ "$migration" == */20260515_create_impersonation_tables.sql ]]; then
+  if [[ "$migration" == */20260515_create_impersonation_tables.sql ||
+        "$migration" == */20261001010000_save_complex_with_courts.sql ]]; then
     hosted_defaults=true
     docker exec "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres -c \
       'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;'
@@ -146,15 +202,19 @@ for migration in supabase/migrations/*.sql; do
   if [[ "$migration" == */20260515_create_impersonation_tables.sql ]]; then
     probe_impersonation_privileges
     echo 'First apply under hosted default grants leaves least-privilege impersonation ACLs: passed'
+  elif [[ "$migration" == */20261001010000_save_complex_with_courts.sql ]]; then
+    probe_court_sports_privileges
+    echo 'First apply under hosted default grants leaves least-privilege court_sports ACLs: passed'
   fi
 done
 
-# Catalog fingerprint of every object owned by the replayable migration.
+# Catalog fingerprint of every object owned by the two replayable migrations.
 # A pinned search_path keeps renderings schema-qualified and deterministic.
 replay_snapshot() {
   docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres <<'SQL'
 SET search_path = pg_catalog;
-WITH rels(rel) AS (VALUES ('public.impersonation_sessions'::regclass), ('public.impersonation_audit'::regclass))
+WITH rels(rel) AS (VALUES ('public.impersonation_sessions'::regclass), ('public.impersonation_audit'::regclass),
+                          ('public.courts'::regclass), ('public.court_sports'::regclass))
 SELECT format('column %s.%s %s notnull=%s default=%s', a.attrelid::regclass, a.attname,
               format_type(a.atttypid, a.atttypmod), a.attnotnull, pg_get_expr(d.adbin, d.adrelid))
   FROM pg_attribute a JOIN rels ON a.attrelid = rels.rel
@@ -168,14 +228,17 @@ UNION ALL SELECT format('table %s rls=%s force=%s acl=%s', oid::regclass, relrow
 UNION ALL SELECT format('policy %s %s permissive=%s cmd=%s roles=%s using=%s check=%s', polrelid::regclass, polname,
               polpermissive, polcmd, polroles::regrole[], pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid))
   FROM pg_policy WHERE polrelid IN (SELECT rel FROM rels)
+UNION ALL SELECT format('function %s definer=%s acl=%s %s', oid::regprocedure, prosecdef, proacl, pg_get_functiondef(oid))
+  FROM pg_proc WHERE proname = 'save_complex_with_courts'
 ORDER BY 1;
 SQL
 }
 
 # Pending migrations must be replayable on the schema they produced, without
-# duplicate objects or any change to columns, RLS, policies or grants.
+# duplicate objects or any change to columns, RLS, policies, grants or the RPC.
 replayable=(
   supabase/migrations/20260515_create_impersonation_tables.sql
+  supabase/migrations/20261001010000_save_complex_with_courts.sql
 )
 before_replay="$(replay_snapshot)"
 for migration in "${replayable[@]}"; do
@@ -187,11 +250,13 @@ if [[ "$(replay_snapshot)" != "$before_replay" ]]; then
   diff <(printf '%s\n' "$before_replay") <(replay_snapshot) >&2 || true
   exit 1
 fi
-echo 'Replay of pending migrations preserved schema, RLS, policies and grants: passed'
+echo 'Replay of pending migrations preserved schema, RLS, policies, grants and RPC: passed'
 
 # Replay must not widen the impersonation ACLs left by the first apply.
 probe_impersonation_privileges
 echo 'Impersonation sessions are select/insert/update-only and audit insert/select-only for service_role, closed to anon/authenticated: passed'
+probe_court_sports_privileges
+echo 'court_sports is plain DML-only for service_role and closed to anon/authenticated after replay: passed'
 
 # Full seed rows, including updated_at_utc, of the catalogs the eight pending
 # data migrations upsert, delete or update.
@@ -275,15 +340,38 @@ expect_drift_rejected 'CREATE ROLE audit_drift_probe; GRANT TRUNCATE ON public.i
   supabase/migrations/20260515_create_impersonation_tables.sql
 expect_drift_rejected 'CREATE ROLE audit_drift_probe; GRANT SELECT (target_user_id) ON public.impersonation_sessions TO audit_drift_probe;' \
   supabase/migrations/20260515_create_impersonation_tables.sql
+expect_drift_rejected 'ALTER TABLE public.courts ALTER COLUMN is_indoor DROP NOT NULL;' \
+  supabase/migrations/20261001010000_save_complex_with_courts.sql
+expect_drift_rejected 'CREATE POLICY "Open read" ON public.court_sports FOR SELECT TO anon USING (true);' \
+  supabase/migrations/20261001010000_save_complex_with_courts.sql
+expect_drift_rejected 'ALTER TABLE public.court_sports DROP CONSTRAINT court_sports_court_id_fkey, ADD FOREIGN KEY (court_id) REFERENCES public.courts(id);' \
+  supabase/migrations/20261001010000_save_complex_with_courts.sql
+expect_drift_rejected 'CREATE ROLE court_drift_probe; GRANT TRUNCATE ON public.court_sports TO court_drift_probe;' \
+  supabase/migrations/20261001010000_save_complex_with_courts.sql
+expect_drift_rejected 'CREATE ROLE court_drift_probe; GRANT UPDATE (sport_id) ON public.court_sports TO court_drift_probe;' \
+  supabase/migrations/20261001010000_save_complex_with_courts.sql
 [[ "$(replay_snapshot)" == "$before_replay" ]]
 echo 'Incompatible pre-existing definitions rejected on replay: passed'
 
-# Broad grants to the API roles are revoked by the replay.
+# Disabled RLS is restored by the replay instead of being reported as drift.
+{ printf 'BEGIN;\nALTER TABLE public.court_sports DISABLE ROW LEVEL SECURITY;\n'
+  cat supabase/migrations/20261001010000_save_complex_with_courts.sql
+  printf "SELECT relrowsecurity FROM pg_class WHERE oid = 'public.court_sports'::regclass;\nROLLBACK;\n"
+} | docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres | grep -Fx t >/dev/null
+echo 'Replay restores disabled court_sports RLS: passed'
+
+# Broad grants to the API roles are revoked by the replay, like disabled RLS.
 { printf 'BEGIN;\nGRANT ALL ON public.impersonation_audit, public.impersonation_sessions TO anon, authenticated, service_role;\n'
   cat supabase/migrations/20260515_create_impersonation_tables.sql
   printf "SELECT has_table_privilege('service_role', 'public.impersonation_audit', 'UPDATE, DELETE, TRUNCATE') OR has_table_privilege('anon', 'public.impersonation_audit', 'SELECT, INSERT') OR has_table_privilege('authenticated', 'public.impersonation_audit', 'SELECT, INSERT') OR has_table_privilege('service_role', 'public.impersonation_sessions', 'DELETE, TRUNCATE') OR has_table_privilege('anon', 'public.impersonation_sessions', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE') OR has_table_privilege('authenticated', 'public.impersonation_sessions', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE');\nROLLBACK;\n"
 } | docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres | grep -Fx f >/dev/null
 echo 'Replay revokes broad impersonation grants: passed'
+
+{ printf 'BEGIN;\nGRANT ALL ON public.court_sports TO PUBLIC;\nGRANT ALL ON public.court_sports TO anon, authenticated, service_role WITH GRANT OPTION;\nGRANT SELECT (sport_id) ON public.court_sports TO anon, authenticated;\n'
+  cat supabase/migrations/20261001010000_save_complex_with_courts.sql
+  printf "SELECT has_table_privilege('public', 'public.court_sports', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN') OR has_table_privilege('service_role', 'public.court_sports', 'TRUNCATE, REFERENCES, TRIGGER, MAINTAIN') OR has_table_privilege('service_role', 'public.court_sports', 'SELECT WITH GRANT OPTION') OR has_table_privilege('anon', 'public.court_sports', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN') OR has_table_privilege('authenticated', 'public.court_sports', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN') OR has_any_column_privilege('anon', 'public.court_sports', 'SELECT') OR has_any_column_privilege('authenticated', 'public.court_sports', 'SELECT') OR NOT (has_table_privilege('service_role', 'public.court_sports', 'SELECT') AND has_table_privilege('service_role', 'public.court_sports', 'INSERT') AND has_table_privilege('service_role', 'public.court_sports', 'UPDATE') AND has_table_privilege('service_role', 'public.court_sports', 'DELETE'));\nROLLBACK;\n"
+} | docker exec -i "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres | grep -Fx f >/dev/null
+echo 'Replay revokes broad court_sports grants: passed'
 
 # Supabase grants its bypass-RLS service role access to application relations.
 # Keep the harness grants limited to the aggregate RPC's fixture and write tables.
@@ -298,7 +386,7 @@ docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < supabase/tests
 if [[ "${UNSAFE_COMPLEX_CONFLICT_TEST:-}" == 1 ]]; then
   # Mutation test: replace only the function in the disposable database, after
   # the existing sequential checks; never alter the migration on disk.
-  awk '/^CREATE FUNCTION public.save_complex_with_courts\(/ { copying=1; sub(/^CREATE FUNCTION/, "CREATE OR REPLACE FUNCTION") } copying { print } /^END \$\$;/ && copying { exit }' \
+  awk '/^CREATE OR REPLACE FUNCTION public.save_complex_with_courts\(/ { copying=1 } copying { print } /^END \$\$;/ && copying { exit }' \
     supabase/migrations/20261001010000_save_complex_with_courts.sql |
     sed '/^ WHERE complexes.organization_id = excluded.organization_id$/d' |
     docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres
