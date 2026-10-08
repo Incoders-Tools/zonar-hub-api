@@ -410,3 +410,5 @@ supabase/.docker/
 # Archivos locales sensibles (si aparecen)
 supabase/.env
 supabase/.env.local
+# Local Pi runtime state
+.atl/
