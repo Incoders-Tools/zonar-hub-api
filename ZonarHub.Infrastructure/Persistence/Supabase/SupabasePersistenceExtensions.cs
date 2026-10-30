@@ -65,6 +65,7 @@ internal static class SupabasePersistenceExtensions
         services.AddScoped<ICourtRepository, CourtRepository>();
         services.AddScoped<ITournamentRepository, TournamentRepository>();
         services.AddScoped<ITournamentAdminRepository, TournamentAdminRepository>();
+        services.AddScoped<IPublicTournamentReadRepository, PublicTournamentReadRepository>();
         services.AddScoped<IRegistrationReadRepository, RegistrationReadRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUserOrganizationAssignmentRepository, UserOrganizationAssignmentRepository>();
