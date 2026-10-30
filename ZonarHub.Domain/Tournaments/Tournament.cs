@@ -113,7 +113,7 @@ public sealed class Tournament : Entity<TournamentId>
     /// Lower-snake-case slug derived from the display name. Mirrors the
     /// frontend buildEntityKey routine so values stay comparable.
     /// </summary>
-    private static string Slugify(string value)
+    internal static string Slugify(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;

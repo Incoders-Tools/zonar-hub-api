@@ -86,9 +86,12 @@ public sealed class CreateTournamentHandler
             request.IsActive,
             request.SelectedCourtIds ?? [],
             nowUtc,
-            nowUtc);
+            nowUtc,
+            request.IsPublic);
 
-        var inserted = await _tournaments.AddAsync(dto, cancellationToken);
+        var inserted = await TournamentPublicSlugGeneration.SaveAsync(
+            dto,
+            candidate => _tournaments.AddAsync(candidate, cancellationToken));
         return Result.Success(TournamentMapper.ToResponse(inserted));
     }
 }

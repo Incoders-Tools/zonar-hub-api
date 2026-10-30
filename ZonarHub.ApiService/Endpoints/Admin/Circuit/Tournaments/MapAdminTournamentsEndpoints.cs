@@ -41,7 +41,7 @@ public static class AdminTournamentsEndpointsExtensions
         group.MapPost("/", CreateAsync)
             .WithName("CreateAdminTournament")
             .WithSummary("Create a tournament")
-            .WithDescription("System administrators may create in any organization; other callers only in an organization of their own tenant. Unknown or foreign organizations return 403.")
+            .WithDescription("System administrators may create in any organization; other callers only in an organization of their own tenant. Unknown or foreign organizations return 403. When isPublic is true the API generates the read-only publicSlug share link (<slugified-name>-<6 base36 chars>); clients cannot send a slug.")
             .Produces<TournamentResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -49,7 +49,7 @@ public static class AdminTournamentsEndpointsExtensions
         group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateAdminTournament")
             .WithSummary("Update a tournament")
-            .WithDescription("The tournament keeps its organization. Unknown ids return 404; a tournament of an organization outside the caller's tenant returns 403 before validation.")
+            .WithDescription("The tournament keeps its organization. Unknown ids return 404; a tournament of an organization outside the caller's tenant returns 403 before validation. The first save with isPublic true generates the read-only publicSlug; it is never regenerated, so turning isPublic off and on again keeps the same share link.")
             .Produces<TournamentResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -120,7 +120,8 @@ public static class AdminTournamentsEndpointsExtensions
             body.SumValue,
             body.Observations,
             body.IsActive,
-            body.SelectedCourtIds ?? []);
+            body.SelectedCourtIds ?? [],
+            body.IsPublic);
 
         var result = await sender.Send(command, cancellationToken);
         return IsForbidden(result.Error)
@@ -161,7 +162,8 @@ public static class AdminTournamentsEndpointsExtensions
             body.SumValue,
             body.Observations,
             body.IsActive,
-            body.SelectedCourtIds ?? []);
+            body.SelectedCourtIds ?? [],
+            body.IsPublic);
 
         var result = await sender.Send(command, cancellationToken);
         return IsForbidden(result.Error)
@@ -192,6 +194,10 @@ public static class AdminTournamentsEndpointsExtensions
         extensions: new Dictionary<string, object?> { ["code"] = error.Code });
 }
 
+/// <summary>
+/// Body of POST /api/admin/tournaments. <c>IsPublic</c> shows the tournament in ZonarHub public sections and
+/// makes the API generate its share-link slug; the slug itself is read-only and never accepted from clients.
+/// </summary>
 public sealed record CreateTournamentRequest(
     Guid OrganizationId,
     string Name,
@@ -219,8 +225,13 @@ public sealed record CreateTournamentRequest(
     decimal? SumValue,
     string? Observations,
     bool IsActive,
-    IReadOnlyList<Guid>? SelectedCourtIds);
+    IReadOnlyList<Guid>? SelectedCourtIds,
+    bool IsPublic = false);
 
+/// <summary>
+/// Body of PUT /api/admin/tournaments/{id}. <c>IsPublic</c> toggles public visibility; an existing share-link
+/// slug is kept when it is turned off and reused when it is turned on again.
+/// </summary>
 public sealed record UpdateTournamentRequest(
     string Name,
     string? Key,
@@ -247,4 +258,5 @@ public sealed record UpdateTournamentRequest(
     decimal? SumValue,
     string? Observations,
     bool IsActive,
-    IReadOnlyList<Guid>? SelectedCourtIds);
+    IReadOnlyList<Guid>? SelectedCourtIds,
+    bool IsPublic = false);

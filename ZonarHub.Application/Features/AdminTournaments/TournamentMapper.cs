@@ -34,5 +34,7 @@ internal static class TournamentMapper
         dto.IsActive,
         dto.SelectedCourtIds,
         dto.CreatedAtUtc,
-        dto.UpdatedAtUtc);
+        dto.UpdatedAtUtc,
+        dto.IsPublic,
+        dto.PublicSlug);
 }

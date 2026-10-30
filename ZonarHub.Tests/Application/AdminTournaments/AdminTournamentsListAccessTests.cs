@@ -167,14 +167,30 @@ internal sealed class RecordingTournamentAdminRepository(DateTime nowUtc) : ITou
 
     public List<Guid> DeletedIds { get; } = [];
 
-    public TournamentAdminDto Seed(Guid organizationId, string name)
+    /// <summary>Number of upcoming saves that fail as if the public slug hit the unique index.</summary>
+    public int PublicSlugConflictsToThrow { get; set; }
+
+    /// <summary>Every public slug offered to AddAsync/UpdateAsync, including the rejected ones.</summary>
+    public List<string?> AttemptedPublicSlugs { get; } = [];
+
+    public TournamentAdminDto Seed(Guid organizationId, string name, bool isPublic = false, string? publicSlug = null)
     {
         var row = new TournamentAdminDto(
             Guid.NewGuid(), organizationId, name, null, null, Guid.NewGuid(), null, null, null, null, null, null,
             new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 2), null, null, null, null, null, null, null,
-            null, null, null, null, null, true, [], nowUtc, nowUtc);
+            null, null, null, null, null, true, [], nowUtc, nowUtc, isPublic, publicSlug);
         _rows.Add(row);
         return row;
+    }
+
+    private void ThrowIfSlugConflict(TournamentAdminDto tournament)
+    {
+        AttemptedPublicSlugs.Add(tournament.PublicSlug);
+        if (PublicSlugConflictsToThrow > 0)
+        {
+            PublicSlugConflictsToThrow--;
+            throw new TournamentPublicSlugConflictException(tournament.PublicSlug ?? string.Empty);
+        }
     }
 
     public Task<IReadOnlyList<TournamentAdminDto>> ListByOrganizationAsync(
@@ -191,6 +207,7 @@ internal sealed class RecordingTournamentAdminRepository(DateTime nowUtc) : ITou
 
     public Task<TournamentAdminDto> AddAsync(TournamentAdminDto tournament, CancellationToken cancellationToken = default)
     {
+        ThrowIfSlugConflict(tournament);
         Added.Add(tournament);
         _rows.Add(tournament);
         return Task.FromResult(tournament);
@@ -198,6 +215,7 @@ internal sealed class RecordingTournamentAdminRepository(DateTime nowUtc) : ITou
 
     public Task<TournamentAdminDto> UpdateAsync(TournamentAdminDto tournament, CancellationToken cancellationToken = default)
     {
+        ThrowIfSlugConflict(tournament);
         Updated.Add(tournament);
         _rows.RemoveAll(row => row.Id == tournament.Id);
         _rows.Add(tournament);

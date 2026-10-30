@@ -14,8 +14,10 @@ public interface ITournamentAdminRepository
 
     Task<TournamentAdminDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
+    /// <exception cref="TournamentPublicSlugConflictException">The public slug is already used by another tournament.</exception>
     Task<TournamentAdminDto> AddAsync(TournamentAdminDto tournament, CancellationToken cancellationToken = default);
 
+    /// <exception cref="TournamentPublicSlugConflictException">The public slug is already used by another tournament.</exception>
     Task<TournamentAdminDto> UpdateAsync(TournamentAdminDto tournament, CancellationToken cancellationToken = default);
 
     Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
@@ -51,4 +53,16 @@ public sealed record TournamentAdminDto(
     bool IsActive,
     IReadOnlyList<Guid> SelectedCourtIds,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    bool IsPublic = false,
+    string? PublicSlug = null);
+
+/// <summary>
+/// Raised by <see cref="ITournamentAdminRepository"/> when a save hits the unique public slug index, so the
+/// caller can retry with a freshly generated slug.
+/// </summary>
+public sealed class TournamentPublicSlugConflictException(string publicSlug)
+    : Exception($"The tournament public slug '{publicSlug}' is already in use.")
+{
+    public string PublicSlug { get; } = publicSlug;
+}

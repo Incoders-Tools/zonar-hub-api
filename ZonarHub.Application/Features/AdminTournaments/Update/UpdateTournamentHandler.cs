@@ -84,10 +84,13 @@ public sealed class UpdateTournamentHandler
             Observations = request.Observations,
             IsActive = request.IsActive,
             SelectedCourtIds = request.SelectedCourtIds ?? [],
+            IsPublic = request.IsPublic,
             UpdatedAtUtc = _clock.UtcNow
         };
 
-        var updated = await _tournaments.UpdateAsync(dto, cancellationToken);
+        var updated = await TournamentPublicSlugGeneration.SaveAsync(
+            dto,
+            candidate => _tournaments.UpdateAsync(candidate, cancellationToken));
         return Result.Success(TournamentMapper.ToResponse(updated));
     }
 }
