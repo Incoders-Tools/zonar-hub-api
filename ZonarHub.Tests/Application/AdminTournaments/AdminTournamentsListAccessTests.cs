@@ -1,6 +1,10 @@
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Application.Features.AdminTournaments;
+using ZonarHub.Application.Features.AdminTournaments.Create;
+using ZonarHub.Application.Features.AdminTournaments.Delete;
 using ZonarHub.Application.Features.AdminTournaments.GetAll;
+using ZonarHub.Application.Features.AdminTournaments.GetById;
+using ZonarHub.Application.Features.AdminTournaments.Update;
 using ZonarHub.Domain.Users;
 using ZonarHub.Tests.Application.AdminUsers;
 
@@ -127,7 +131,7 @@ public class AdminTournamentsListAccessTests
 }
 
 /// <summary>
-/// Wires the real list handler to the in-memory user/organization stores and a recording tournament repository.
+/// Wires the real tournament handlers to the in-memory user/organization stores and a recording tournament repository.
 /// </summary>
 internal sealed class AdminTournamentsListTestHarness
 {
@@ -136,11 +140,19 @@ internal sealed class AdminTournamentsListTestHarness
         Users = new AdminUsersTestHarness(nowUtc);
         Tournaments = new RecordingTournamentAdminRepository(nowUtc);
         List = new GetTournamentsHandler(Users.CurrentUser, Users.Users, Users.Organizations, Tournaments);
+        GetById = new GetTournamentByIdHandler(Users.CurrentUser, Users.Users, Users.Organizations, Tournaments);
+        Create = new CreateTournamentHandler(Users.CurrentUser, Users.Users, Users.Organizations, Tournaments, Users.Clock);
+        Update = new UpdateTournamentHandler(Users.CurrentUser, Users.Users, Users.Organizations, Tournaments, Users.Clock);
+        Delete = new DeleteTournamentHandler(Users.CurrentUser, Users.Users, Users.Organizations, Tournaments);
     }
 
     public AdminUsersTestHarness Users { get; }
     public RecordingTournamentAdminRepository Tournaments { get; }
     public GetTournamentsHandler List { get; }
+    public GetTournamentByIdHandler GetById { get; }
+    public CreateTournamentHandler Create { get; }
+    public UpdateTournamentHandler Update { get; }
+    public DeleteTournamentHandler Delete { get; }
 }
 
 internal sealed class RecordingTournamentAdminRepository(DateTime nowUtc) : ITournamentAdminRepository
@@ -148,6 +160,12 @@ internal sealed class RecordingTournamentAdminRepository(DateTime nowUtc) : ITou
     private readonly List<TournamentAdminDto> _rows = [];
 
     public List<Guid> ListedOrganizationIds { get; } = [];
+
+    public List<TournamentAdminDto> Added { get; } = [];
+
+    public List<TournamentAdminDto> Updated { get; } = [];
+
+    public List<Guid> DeletedIds { get; } = [];
 
     public TournamentAdminDto Seed(Guid organizationId, string name)
     {
@@ -169,14 +187,27 @@ internal sealed class RecordingTournamentAdminRepository(DateTime nowUtc) : ITou
     }
 
     public Task<TournamentAdminDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
+        Task.FromResult(_rows.SingleOrDefault(row => row.Id == id));
 
-    public Task<TournamentAdminDto> AddAsync(TournamentAdminDto tournament, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
+    public Task<TournamentAdminDto> AddAsync(TournamentAdminDto tournament, CancellationToken cancellationToken = default)
+    {
+        Added.Add(tournament);
+        _rows.Add(tournament);
+        return Task.FromResult(tournament);
+    }
 
-    public Task<TournamentAdminDto> UpdateAsync(TournamentAdminDto tournament, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
+    public Task<TournamentAdminDto> UpdateAsync(TournamentAdminDto tournament, CancellationToken cancellationToken = default)
+    {
+        Updated.Add(tournament);
+        _rows.RemoveAll(row => row.Id == tournament.Id);
+        _rows.Add(tournament);
+        return Task.FromResult(tournament);
+    }
 
-    public Task DeleteAsync(Guid id, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
+    public Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        DeletedIds.Add(id);
+        _rows.RemoveAll(row => row.Id == id);
+        return Task.CompletedTask;
+    }
 }

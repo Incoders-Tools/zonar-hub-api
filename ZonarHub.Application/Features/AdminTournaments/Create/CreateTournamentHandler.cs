@@ -1,17 +1,26 @@
 using MediatR;
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Domain.Common;
+using ZonarHub.Domain.Organizations;
+using ZonarHub.Domain.Users;
 
 namespace ZonarHub.Application.Features.AdminTournaments.Create;
 
 public sealed class CreateTournamentHandler
     : IRequestHandler<CreateTournamentCommand, Result<TournamentResponse>>
 {
+    private readonly TournamentOrganizationAccess _access;
     private readonly ITournamentAdminRepository _tournaments;
     private readonly IClock _clock;
 
-    public CreateTournamentHandler(ITournamentAdminRepository tournaments, IClock clock)
+    public CreateTournamentHandler(
+        ICurrentUser currentUser,
+        IUserRepository users,
+        IOrganizationRepository organizations,
+        ITournamentAdminRepository tournaments,
+        IClock clock)
     {
+        _access = new TournamentOrganizationAccess(currentUser, users, organizations);
         _tournaments = tournaments;
         _clock = clock;
     }
@@ -23,6 +32,11 @@ public sealed class CreateTournamentHandler
         if (request.OrganizationId == Guid.Empty)
         {
             return Result.Failure<TournamentResponse>(AdminTournamentErrors.OrganizationRequired);
+        }
+
+        if (!await _access.CanAccessAsync(request.OrganizationId, cancellationToken))
+        {
+            return Result.Failure<TournamentResponse>(AdminTournamentErrors.Forbidden);
         }
 
         var name = (request.Name ?? string.Empty).Trim();

@@ -7,6 +7,7 @@ using ZonarHub.Application.Features.AdminTournaments.Delete;
 using ZonarHub.Application.Features.AdminTournaments.GetAll;
 using ZonarHub.Application.Features.AdminTournaments.GetById;
 using ZonarHub.Application.Features.AdminTournaments.Update;
+using ZonarHub.Domain.Common;
 
 namespace ZonarHub.ApiService.Endpoints.Admin.Circuit.Tournaments;
 
@@ -32,26 +33,34 @@ public static class AdminTournamentsEndpointsExtensions
         group.MapGet("/{id:guid}", GetByIdAsync)
             .WithName("GetAdminTournamentById")
             .WithSummary("Get a tournament by id")
+            .WithDescription("Unknown ids return 404. A tournament of an organization outside the caller's tenant returns 403; system administrators may read any tournament.")
             .Produces<TournamentResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
         group.MapPost("/", CreateAsync)
             .WithName("CreateAdminTournament")
             .WithSummary("Create a tournament")
+            .WithDescription("System administrators may create in any organization; other callers only in an organization of their own tenant. Unknown or foreign organizations return 403.")
             .Produces<TournamentResponse>(StatusCodes.Status201Created)
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateAdminTournament")
             .WithSummary("Update a tournament")
+            .WithDescription("The tournament keeps its organization. Unknown ids return 404; a tournament of an organization outside the caller's tenant returns 403 before validation.")
             .Produces<TournamentResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
         group.MapDelete("/{id:guid}", DeleteAsync)
             .WithName("DeleteAdminTournament")
             .WithSummary("Delete a tournament")
+            .WithDescription("Unknown ids return 404; a tournament of an organization outside the caller's tenant returns 403 and is not deleted.")
             .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
         return app;
@@ -63,28 +72,23 @@ public static class AdminTournamentsEndpointsExtensions
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(new GetTournamentsQuery(organizationId), cancellationToken);
-        if (result.IsFailure && result.Error == AdminTournamentErrors.Forbidden)
-        {
-            return TypedResults.Problem(
-                title: "Forbidden",
-                detail: result.Error.MessageKey,
-                statusCode: StatusCodes.Status403Forbidden,
-                extensions: new Dictionary<string, object?> { ["code"] = result.Error.Code });
-        }
-
-        return result.Match(items => (IResult)TypedResults.Ok(new TournamentListResponse(items)));
+        return IsForbidden(result.Error)
+            ? Forbidden(result.Error)
+            : result.Match(items => (IResult)TypedResults.Ok(new TournamentListResponse(items)));
     }
 
-    private static async Task<IResult> GetByIdAsync(
+    internal static async Task<IResult> GetByIdAsync(
         Guid id,
         ISender sender,
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(new GetTournamentByIdQuery(id), cancellationToken);
-        return result.Match(item => (IResult)TypedResults.Ok(item));
+        return IsForbidden(result.Error)
+            ? Forbidden(result.Error)
+            : result.Match(item => (IResult)TypedResults.Ok(item));
     }
 
-    private static async Task<IResult> CreateAsync(
+    internal static async Task<IResult> CreateAsync(
         [FromBody] CreateTournamentRequest body,
         ISender sender,
         CancellationToken cancellationToken)
@@ -119,10 +123,12 @@ public static class AdminTournamentsEndpointsExtensions
             body.SelectedCourtIds ?? []);
 
         var result = await sender.Send(command, cancellationToken);
-        return result.Match(item => TypedResults.Created($"{RoutePrefix}/{item.Id}", item));
+        return IsForbidden(result.Error)
+            ? Forbidden(result.Error)
+            : result.Match(item => TypedResults.Created($"{RoutePrefix}/{item.Id}", item));
     }
 
-    private static async Task<IResult> UpdateAsync(
+    internal static async Task<IResult> UpdateAsync(
         Guid id,
         [FromBody] UpdateTournamentRequest body,
         ISender sender,
@@ -158,17 +164,32 @@ public static class AdminTournamentsEndpointsExtensions
             body.SelectedCourtIds ?? []);
 
         var result = await sender.Send(command, cancellationToken);
-        return result.Match(item => (IResult)TypedResults.Ok(item));
+        return IsForbidden(result.Error)
+            ? Forbidden(result.Error)
+            : result.Match(item => (IResult)TypedResults.Ok(item));
     }
 
-    private static async Task<IResult> DeleteAsync(
+    internal static async Task<IResult> DeleteAsync(
         Guid id,
         ISender sender,
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(new DeleteTournamentCommand(id), cancellationToken);
-        return result.Match(() => (IResult)TypedResults.NoContent());
+        return IsForbidden(result.Error)
+            ? Forbidden(result.Error)
+            : result.Match(() => (IResult)TypedResults.NoContent());
     }
+
+    private static bool IsForbidden(Error error) => error == AdminTournamentErrors.Forbidden;
+
+    /// <summary>
+    /// The shared error mapper has no 403 type, so the tenant refusal is mapped here for every tournament endpoint.
+    /// </summary>
+    private static IResult Forbidden(Error error) => TypedResults.Problem(
+        title: "Forbidden",
+        detail: error.MessageKey,
+        statusCode: StatusCodes.Status403Forbidden,
+        extensions: new Dictionary<string, object?> { ["code"] = error.Code });
 }
 
 public sealed record CreateTournamentRequest(
