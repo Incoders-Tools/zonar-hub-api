@@ -44,7 +44,8 @@ public sealed class UpdateOrganizationHandler
             request.Type,
             request.LogoUrl,
             request.IsActive,
-            _clock.UtcNow);
+            _clock.UtcNow,
+            request.ToPublicProfile());
 
         if (updated.IsFailure)
         {

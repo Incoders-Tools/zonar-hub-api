@@ -12,4 +12,12 @@ public sealed record CreateOrganizationCommand(
     string? Description,
     OrganizationType Type,
     string? LogoUrl,
-    Guid CreatedByUserId) : IRequest<Result<OrganizationResponse>>;
+    Guid CreatedByUserId,
+    bool PublicProfileEnabled = false,
+    string? WebsiteUrl = null,
+    string? InstagramUrl = null,
+    string? FacebookUrl = null,
+    string? TiktokUrl = null,
+    string? YoutubeUrl = null,
+    string? WhatsappPhone = null,
+    string? ContactEmail = null) : IRequest<Result<OrganizationResponse>>, IOrganizationPublicProfileFields;

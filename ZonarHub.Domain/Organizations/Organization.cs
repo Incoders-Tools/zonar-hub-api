@@ -15,6 +15,7 @@ public sealed class Organization : Entity<OrganizationId>
     public string? Description { get; private set; }
     public OrganizationType Type { get; private set; }
     public string? LogoUrl { get; private set; }
+    public OrganizationPublicProfile PublicProfile { get; private set; } = OrganizationPublicProfile.Empty;
     public bool IsActive { get; private set; }
     public Guid CreatedByUserId { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
@@ -29,7 +30,8 @@ public sealed class Organization : Entity<OrganizationId>
         OrganizationType type,
         string? logoUrl,
         Guid createdByUserId,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        OrganizationPublicProfile? publicProfile = null)
     {
         if (tenantId == Guid.Empty)
         {
@@ -54,6 +56,7 @@ public sealed class Organization : Entity<OrganizationId>
             Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
             Type = type,
             LogoUrl = string.IsNullOrWhiteSpace(logoUrl) ? null : logoUrl.Trim(),
+            PublicProfile = publicProfile ?? OrganizationPublicProfile.Empty,
             IsActive = true,
             CreatedByUserId = createdByUserId,
             CreatedAtUtc = nowUtc,
@@ -72,7 +75,8 @@ public sealed class Organization : Entity<OrganizationId>
         bool isActive,
         Guid createdByUserId,
         DateTime createdAtUtc,
-        DateTime updatedAtUtc) =>
+        DateTime updatedAtUtc,
+        OrganizationPublicProfile? publicProfile = null) =>
         new(id)
         {
             TenantId = tenantId,
@@ -81,12 +85,16 @@ public sealed class Organization : Entity<OrganizationId>
             Description = description,
             Type = type,
             LogoUrl = logoUrl,
+            PublicProfile = publicProfile ?? OrganizationPublicProfile.Empty,
             IsActive = isActive,
             CreatedByUserId = createdByUserId,
             CreatedAtUtc = createdAtUtc,
             UpdatedAtUtc = updatedAtUtc,
         };
 
+    /// <summary>
+    /// Updates the editable fields. A null <paramref name="publicProfile"/> keeps the current public profile.
+    /// </summary>
     public Result Update(
         string displayName,
         string? legalName,
@@ -94,7 +102,8 @@ public sealed class Organization : Entity<OrganizationId>
         OrganizationType type,
         string? logoUrl,
         bool isActive,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        OrganizationPublicProfile? publicProfile = null)
     {
         if (string.IsNullOrWhiteSpace(displayName))
         {
@@ -111,6 +120,7 @@ public sealed class Organization : Entity<OrganizationId>
         Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
         Type = type;
         LogoUrl = string.IsNullOrWhiteSpace(logoUrl) ? null : logoUrl.Trim();
+        PublicProfile = publicProfile ?? PublicProfile;
         IsActive = isActive;
         UpdatedAtUtc = nowUtc;
 
