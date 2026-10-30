@@ -24,8 +24,10 @@ public static class AdminTournamentsEndpointsExtensions
         group.MapGet("/", GetAllAsync)
             .WithName("GetAdminTournaments")
             .WithSummary("List tournaments for the active organization")
+            .WithDescription("System administrators may list any organization; other callers only an organization of their own tenant. Unknown or foreign organizations return 403.")
             .Produces<TournamentListResponse>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
 
         group.MapGet("/{id:guid}", GetByIdAsync)
             .WithName("GetAdminTournamentById")
@@ -55,12 +57,21 @@ public static class AdminTournamentsEndpointsExtensions
         return app;
     }
 
-    private static async Task<IResult> GetAllAsync(
+    internal static async Task<IResult> GetAllAsync(
         [FromQuery] Guid organizationId,
         ISender sender,
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(new GetTournamentsQuery(organizationId), cancellationToken);
+        if (result.IsFailure && result.Error == AdminTournamentErrors.Forbidden)
+        {
+            return TypedResults.Problem(
+                title: "Forbidden",
+                detail: result.Error.MessageKey,
+                statusCode: StatusCodes.Status403Forbidden,
+                extensions: new Dictionary<string, object?> { ["code"] = result.Error.Code });
+        }
+
         return result.Match(items => (IResult)TypedResults.Ok(new TournamentListResponse(items)));
     }
 
