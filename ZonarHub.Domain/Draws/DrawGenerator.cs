@@ -10,8 +10,7 @@ public static class DrawGenerator
 {
     /// <summary>
     /// Validates <paramref name="request"/> and generates its draw, or returns a <see cref="DrawErrors"/> validation
-    /// error. <see cref="DrawFormat.GroupsThenKnockout"/> is not supported yet and returns
-    /// <see cref="DrawErrors.FormatNotSupported"/>.
+    /// error. An unknown <see cref="DrawFormat"/> returns <see cref="DrawErrors.FormatNotSupported"/>.
     /// </summary>
     public static Result<Draw> Generate(DrawRequest request)
     {
@@ -24,15 +23,16 @@ public static class DrawGenerator
         var seed = request.Randomization.Seed!.Value;
         var random = new DeterministicRandom(seed);
 
-        var phase = request.Format switch
+        var phases = request.Format switch
         {
-            DrawFormat.SingleElimination => SingleElimination.Build(request, random),
-            DrawFormat.RoundRobin => RoundRobin.Build(request, random),
-            _ => Result.Failure<Phase>(DrawErrors.FormatNotSupported),
+            DrawFormat.SingleElimination => Single(SingleElimination.Build(request, random)),
+            DrawFormat.RoundRobin => Single(RoundRobin.Build(request, random)),
+            DrawFormat.GroupsThenKnockout => GroupsThenKnockout.Build(request, random),
+            _ => Result.Failure<IReadOnlyList<Phase>>(DrawErrors.FormatNotSupported),
         };
 
-        if (phase.IsFailure)
-            return Result.Failure<Draw>(phase.Error);
+        if (phases.IsFailure)
+            return Result.Failure<Draw>(phases.Error);
 
         return Result.Success(new Draw(
             request.Format,
@@ -40,6 +40,11 @@ public static class DrawGenerator
             request.Randomization.Mode,
             seed,
             request.Participants.ToList().AsReadOnly(),
-            new[] { phase.Value }.AsReadOnly()));
+            phases.Value));
     }
+
+    private static Result<IReadOnlyList<Phase>> Single(Result<Phase> phase) =>
+        phase.IsFailure
+            ? Result.Failure<IReadOnlyList<Phase>>(phase.Error)
+            : Result.Success<IReadOnlyList<Phase>>(new[] { phase.Value }.AsReadOnly());
 }

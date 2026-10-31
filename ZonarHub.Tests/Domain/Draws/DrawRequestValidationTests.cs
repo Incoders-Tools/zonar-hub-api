@@ -129,16 +129,14 @@ public class DrawRequestValidationTests
         AssertFails(SingleElimination(Participants(4), participationFormat: (ParticipationFormat)42), "draws.invalid_participation_format");
     }
 
-    [Theory]
-    [InlineData(DrawFormat.GroupsThenKnockout)]
-    [InlineData((DrawFormat)42)]
-    public void Generate_FormatNotSupportedYet_Fails(DrawFormat format)
+    [Fact]
+    public void Generate_UnknownFormat_Fails()
     {
-        AssertFails(SingleElimination(Participants(4)) with { Format = format }, "draws.format_not_supported");
+        AssertFails(SingleElimination(Participants(4)) with { Format = (DrawFormat)42 }, "draws.format_not_supported");
     }
 
     [Fact]
-    public void Generate_FormatsNotSupportedYet_FailEvenWithTheirOptions()
+    public void Generate_UnknownFormat_FailsEvenWithEveryFormatOption()
     {
         var options = new DrawOptions(RoundRobin: new RoundRobinOptions(), Groups: new GroupStageOptions(GroupCount: 2));
 
@@ -146,7 +144,84 @@ public class DrawRequestValidationTests
         Assert.Equal(2, options.Groups!.QualifiersPerGroup);
         Assert.Null(options.Groups.GroupSize);
         Assert.Null(options.Knockout);
-        AssertFails(SingleElimination(Participants(8)) with { Format = DrawFormat.GroupsThenKnockout, Options = options }, "draws.format_not_supported");
+        AssertFails(SingleElimination(Participants(8)) with { Format = (DrawFormat)42, Options = options }, "draws.format_not_supported");
+    }
+
+    // Groups then knockout options (D2, D7)
+
+    [Fact]
+    public void Generate_GroupCountAndGroupSizeTogether_Fail()
+    {
+        AssertFails(Groups(Participants(8), groupCount: 2, groupSize: 4), "draws.group_options_conflict");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Generate_NonPositiveGroupCount_Fails(int groupCount)
+    {
+        AssertFails(Groups(Participants(8), groupCount: groupCount), "draws.invalid_group_count");
+    }
+
+    [Theory]
+    [InlineData(8, 5)]
+    [InlineData(5, 3)]
+    [InlineData(2, 2)]
+    public void Generate_GroupCountLeavingAGroupBelowTwo_Fails(int count, int groupCount)
+    {
+        AssertFails(Groups(Participants(count), groupCount: groupCount, qualifiers: 1), "draws.group_too_small");
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(0)]
+    [InlineData(-4)]
+    public void Generate_GroupSizeBelowTwo_Fails(int groupSize)
+    {
+        AssertFails(Groups(Participants(8), groupSize: groupSize), "draws.invalid_group_size");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public void Generate_QualifiersBelowOneOrNotBelowTheSmallestGroup_Fail(int qualifiers)
+    {
+        // 10 participants in 3 groups: 4, 3 and 3.
+        AssertFails(Groups(Participants(10), groupCount: 3, qualifiers: qualifiers), "draws.invalid_qualifiers");
+    }
+
+    [Fact]
+    public void Generate_QualifiersBelowTheSmallestGroup_Succeed()
+    {
+        Assert.True(DrawGenerator.Generate(Groups(Participants(10), groupCount: 3, qualifiers: 2)).IsSuccess);
+    }
+
+    [Fact]
+    public void Generate_SingleGroupWithOneQualifier_FailsForLackOfAKnockout()
+    {
+        AssertFails(Groups(Participants(4), groupCount: 1, qualifiers: 1), "draws.knockout_min_qualifiers");
+    }
+
+    [Fact]
+    public void Generate_GroupsThirdPlaceWithFewerThanFourQualifiers_Fails()
+    {
+        AssertFails(Groups(Participants(6), groupCount: 3, qualifiers: 1, thirdPlaceMatch: true), "draws.third_place_min_participants");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    public void Generate_GroupsWithRoundRobinLegsOtherThanOneOrTwo_Fail(int legs)
+    {
+        AssertFails(Groups(Participants(8), groupCount: 2, legs: legs), "draws.invalid_round_robin_legs");
+    }
+
+    [Fact]
+    public void Generate_GroupsBaseValidation_RunsBeforeGroupOptions()
+    {
+        AssertFails(Groups(Participants(1), groupCount: 2, groupSize: 4), "draws.participants_min");
     }
 
     [Theory]
