@@ -24,6 +24,17 @@ internal static class DrawTestData
             randomization ?? RandomizationPolicy.Seeded(2026),
             new DrawOptions(Knockout: new KnockoutOptions(thirdPlaceMatch)));
 
+    public static DrawRequest RoundRobin(
+        IReadOnlyList<DrawParticipant> participants,
+        RandomizationPolicy? randomization = null,
+        int legs = 1) =>
+        new(
+            DrawFormat.RoundRobin,
+            ParticipationFormat.Individual,
+            participants,
+            randomization ?? RandomizationPolicy.Seeded(2026),
+            new DrawOptions(RoundRobin: new RoundRobinOptions(legs)));
+
     public static Draw Generate(DrawRequest request)
     {
         var result = DrawGenerator.Generate(request);
@@ -32,6 +43,8 @@ internal static class DrawTestData
     }
 
     public static Phase Knockout(Draw draw) => Assert.Single(draw.Phases, phase => phase.Kind == PhaseKind.Knockout);
+
+    public static Phase RoundRobinPhase(Draw draw) => Assert.Single(draw.Phases, phase => phase.Kind == PhaseKind.RoundRobin);
 
     public static IEnumerable<string> ParticipantIds(Match match) =>
         new[] { match.Home, match.Away }.OfType<ParticipantSlot>().Select(slot => slot.ParticipantId);
@@ -48,6 +61,6 @@ internal static class DrawTestData
     public static IReadOnlyList<object> Snapshot(Draw draw) =>
         draw.Phases
             .SelectMany(phase => phase.Rounds.SelectMany(round =>
-                round.Matches.Select(match => (object)(phase.Id, phase.Kind, round.Number, round.Name, match))))
+                round.Matches.Select(match => (object)(phase.Id, phase.Kind, round.Number, round.Name, string.Join(',', round.RestingParticipantIds), match))))
             .ToList();
 }

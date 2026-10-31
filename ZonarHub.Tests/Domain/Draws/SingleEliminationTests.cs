@@ -173,6 +173,13 @@ public class SingleEliminationTests
         Assert.Throws<NotSupportedException>(() => ((IList<Phase>)draw.Phases).Clear());
     }
 
+    [Theory]
+    [MemberData(nameof(Counts))]
+    public void Generate_KnockoutRoundsHaveNoRestingParticipants_ByesStayByeMatches(int count)
+    {
+        Assert.All(Bracket(count).Rounds, round => Assert.Empty(round.RestingParticipantIds));
+    }
+
     [Fact]
     public void Generate_TwoParticipants_IsASingleFinal()
     {

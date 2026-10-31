@@ -130,7 +130,6 @@ public class DrawRequestValidationTests
     }
 
     [Theory]
-    [InlineData(DrawFormat.RoundRobin)]
     [InlineData(DrawFormat.GroupsThenKnockout)]
     [InlineData((DrawFormat)42)]
     public void Generate_FormatNotSupportedYet_Fails(DrawFormat format)
@@ -147,8 +146,40 @@ public class DrawRequestValidationTests
         Assert.Equal(2, options.Groups!.QualifiersPerGroup);
         Assert.Null(options.Groups.GroupSize);
         Assert.Null(options.Knockout);
-        AssertFails(SingleElimination(Participants(8)) with { Format = DrawFormat.RoundRobin, Options = options }, "draws.format_not_supported");
         AssertFails(SingleElimination(Participants(8)) with { Format = DrawFormat.GroupsThenKnockout, Options = options }, "draws.format_not_supported");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    [InlineData(-1)]
+    public void Generate_RoundRobinLegsOtherThanOneOrTwo_Fail(int legs)
+    {
+        AssertFails(RoundRobin(Participants(4), legs: legs), "draws.invalid_round_robin_legs");
+    }
+
+    [Fact]
+    public void Generate_RoundRobinBaseValidation_RunsBeforeLegs()
+    {
+        AssertFails(RoundRobin(Participants(1), legs: 3), "draws.participants_min");
+    }
+
+    [Fact]
+    public void Generate_RoundRobinWithoutOptions_PlaysOneLeg()
+    {
+        var withoutOptions = Generate(RoundRobin(Participants(4)) with { Options = null });
+        var withoutRoundRobinOptions = Generate(RoundRobin(Participants(4)) with { Options = new DrawOptions() });
+
+        Assert.Equal(3, RoundRobinPhase(withoutOptions).Rounds.Count);
+        Assert.Equal(3, RoundRobinPhase(withoutRoundRobinOptions).Rounds.Count);
+    }
+
+    [Fact]
+    public void Generate_SingleElimination_IgnoresInvalidRoundRobinOptions()
+    {
+        var draw = Generate(SingleElimination(Participants(4)) with { Options = new DrawOptions(RoundRobin: new RoundRobinOptions(9)) });
+
+        Assert.Equal(2, Knockout(draw).Rounds.Count);
     }
 
     [Fact]

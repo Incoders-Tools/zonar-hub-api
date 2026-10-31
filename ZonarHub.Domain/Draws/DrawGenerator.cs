@@ -10,8 +10,8 @@ public static class DrawGenerator
 {
     /// <summary>
     /// Validates <paramref name="request"/> and generates its draw, or returns a <see cref="DrawErrors"/> validation
-    /// error. <see cref="DrawFormat.RoundRobin"/> and <see cref="DrawFormat.GroupsThenKnockout"/> are not supported yet
-    /// and return <see cref="DrawErrors.FormatNotSupported"/>.
+    /// error. <see cref="DrawFormat.GroupsThenKnockout"/> is not supported yet and returns
+    /// <see cref="DrawErrors.FormatNotSupported"/>.
     /// </summary>
     public static Result<Draw> Generate(DrawRequest request)
     {
@@ -27,6 +27,7 @@ public static class DrawGenerator
         var phase = request.Format switch
         {
             DrawFormat.SingleElimination => SingleElimination.Build(request, random),
+            DrawFormat.RoundRobin => RoundRobin.Build(request, random),
             _ => Result.Failure<Phase>(DrawErrors.FormatNotSupported),
         };
 

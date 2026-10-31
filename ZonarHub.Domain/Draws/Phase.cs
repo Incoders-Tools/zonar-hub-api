@@ -4,6 +4,9 @@ public enum PhaseKind
 {
     GroupStage = 1,
     Knockout = 2,
+
+    /// <summary>A single round robin over every participant (phase id <c>RR</c>).</summary>
+    RoundRobin = 3,
 }
 
 /// <summary>

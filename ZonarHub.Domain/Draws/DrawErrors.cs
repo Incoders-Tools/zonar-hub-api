@@ -17,6 +17,7 @@ public static class DrawErrors
     public static readonly Error InvalidParticipationFormat = Validation("invalid_participation_format");
     public static readonly Error FormatNotSupported = Validation("format_not_supported");
     public static readonly Error ThirdPlaceMinParticipants = Validation("third_place_min_participants");
+    public static readonly Error InvalidRoundRobinLegs = Validation("invalid_round_robin_legs");
 
     private static Error Validation(string name) => Error.Validation($"draws.{name}", $"draws.errors.{name}");
 }
