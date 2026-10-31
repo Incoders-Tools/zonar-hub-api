@@ -9,7 +9,10 @@ public sealed record DrawParticipant
     /// <param name="displayName">Name shown for the entry.</param>
     /// <param name="members">Member names for pairs and teams; copied, never shared with the caller.</param>
     /// <param name="seedRank">Optional seed rank (1 is the top seed); only lower-is-better order matters.</param>
-    /// <param name="separationKey">Optional key (e.g. club) for participants that should be kept apart.</param>
+    /// <param name="separationKey">
+    /// Optional key (e.g. club) for participants that should be kept apart: out of the same group and of the same
+    /// first-round knockout match when possible (trimmed, case-insensitive; blank is no key). Stored as given.
+    /// </param>
     public DrawParticipant(
         string id,
         string displayName,

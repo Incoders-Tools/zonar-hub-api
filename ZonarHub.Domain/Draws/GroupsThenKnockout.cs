@@ -6,7 +6,9 @@ namespace ZonarHub.Domain.Draws;
 
 /// <summary>
 /// Groups then knockout: a <see cref="PhaseKind.GroupStage"/> phase (id <c>G</c>) of round-robin groups, followed by a
-/// knockout phase (id <c>KO</c>) fed by <see cref="GroupPositionSlot"/>s.
+/// knockout phase (id <c>KO</c>) fed by <see cref="GroupPositionSlot"/>s. Separation keys spread participants of one
+/// key over different groups when possible (<see cref="Separation.SeparateGroups"/>); the knockout entrants are group
+/// positions, so keys do not apply to it.
 /// </summary>
 internal static class GroupsThenKnockout
 {
@@ -45,14 +47,15 @@ internal static class GroupsThenKnockout
         if (thirdPlaceMatch && entrantCount < ThirdPlaceMinEntrants)
             return Result.Failure<IReadOnlyList<Phase>>(DrawErrors.ThirdPlaceMinParticipants);
 
-        var order = SeedOrder.Arrange(request.Participants, request.Randomization.Mode, random)
-            .Select(participant => participant.Id)
-            .ToList();
+        var order = SeedOrder.Arrange(request.Participants, request.Randomization.Mode, random);
+        var distribution = Distribute(order, sizes.Value);
+        Separation.SeparateGroups(distribution, request.Randomization.Mode);
 
-        var groups = Distribute(order, sizes.Value)
-            .Select((members, index) =>
+        var groups = distribution
+            .Select((participants, index) =>
             {
                 var id = GroupId(index);
+                var members = participants.Select(participant => participant.Id).ToList();
                 return new Group(id, members.AsReadOnly(), RoundRobinSchedule.Build($"{PhaseId}-{id}", members, legs));
             })
             .ToList();
@@ -107,9 +110,9 @@ internal static class GroupsThenKnockout
     /// already hold their size. Seeds 1 to the group count therefore head distinct groups, and when the last pass runs
     /// backward its participants still go to the first (larger) groups.
     /// </summary>
-    private static List<List<string>> Distribute(IReadOnlyList<string> order, IReadOnlyList<int> sizes)
+    private static List<List<DrawParticipant>> Distribute(IReadOnlyList<DrawParticipant> order, IReadOnlyList<int> sizes)
     {
-        var groups = sizes.Select(size => new List<string>(size)).ToList();
+        var groups = sizes.Select(size => new List<DrawParticipant>(size)).ToList();
         var next = 0;
         for (var pass = 0; next < order.Count; pass++)
         {

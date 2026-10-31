@@ -4,6 +4,7 @@ namespace ZonarHub.Domain.Draws;
 
 /// <summary>
 /// Pure round robin: one <see cref="PhaseKind.RoundRobin"/> phase (id <c>RR</c>) where everyone plays everyone.
+/// Separation keys change nothing here: every pair meets regardless of the order.
 /// </summary>
 internal static class RoundRobin
 {

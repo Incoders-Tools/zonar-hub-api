@@ -40,7 +40,10 @@ public static class DrawGenerator
             request.Randomization.Mode,
             seed,
             request.Participants.ToList().AsReadOnly(),
-            phases.Value));
+            phases.Value)
+        {
+            SeparationConflicts = Separation.FindConflicts(request.Participants, phases.Value),
+        });
     }
 
     private static Result<IReadOnlyList<Phase>> Single(Result<Phase> phase) =>

@@ -9,4 +9,11 @@ public sealed record Draw(
     RandomizationMode RandomizationMode,
     ulong Seed,
     IReadOnlyList<DrawParticipant> Participants,
-    IReadOnlyList<Phase> Phases);
+    IReadOnlyList<Phase> Phases)
+{
+    /// <summary>
+    /// Separations that could not be satisfied (see <see cref="DrawParticipant.SeparationKey"/>), in phase order, then
+    /// match or group order. Empty when every separation holds or no keys were given; such conflicts never fail a draw.
+    /// </summary>
+    public IReadOnlyList<SeparationConflict> SeparationConflicts { get; init; } = [];
+}
