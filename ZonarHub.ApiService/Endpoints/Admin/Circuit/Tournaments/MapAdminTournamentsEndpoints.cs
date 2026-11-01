@@ -182,12 +182,13 @@ public static class AdminTournamentsEndpointsExtensions
             : result.Match(() => (IResult)TypedResults.NoContent());
     }
 
-    private static bool IsForbidden(Error error) => error == AdminTournamentErrors.Forbidden;
+    internal static bool IsForbidden(Error error) => error == AdminTournamentErrors.Forbidden;
 
     /// <summary>
-    /// The shared error mapper has no 403 type, so the tenant refusal is mapped here for every tournament endpoint.
+    /// The shared error mapper has no 403 type, so the tenant refusal is mapped here for every tournament endpoint
+    /// (including the tournament draw endpoints).
     /// </summary>
-    private static IResult Forbidden(Error error) => TypedResults.Problem(
+    internal static IResult Forbidden(Error error) => TypedResults.Problem(
         title: "Forbidden",
         detail: error.MessageKey,
         statusCode: StatusCodes.Status403Forbidden,
