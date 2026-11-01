@@ -11,4 +11,9 @@ public static class PublicTournamentErrors
     public static readonly Error NotFound = Error.NotFound(
         "public_tournaments.not_found",
         "public_tournaments.errors.not_found");
+
+    /// <summary>The showcase tournament has no published draw (none yet, or it is still a private draft).</summary>
+    public static readonly Error DrawNotFound = Error.NotFound(
+        "public_draws.not_found",
+        "public_draws.errors.not_found");
 }

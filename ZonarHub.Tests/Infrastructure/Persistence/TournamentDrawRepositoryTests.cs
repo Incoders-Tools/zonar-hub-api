@@ -352,6 +352,7 @@ public class TournamentDrawRepositoryTests
 
         Assert.Equal(TournamentId, published!.TournamentId);
         Assert.Equal(Snapshot(draw), Snapshot(published.Structure));
+        Assert.Equal(new DrawOptions(Knockout: new KnockoutOptions(true)), published.Options);
         Assert.False(published.Scoring.ThirdSetSuperTiebreak);
         AssertUtc(new DateTime(2026, 10, 30, 9, 0, 0, DateTimeKind.Utc), published.PublishedAtUtc);
         AssertUtc(new DateTime(2026, 10, 30, 9, 0, 0, DateTimeKind.Utc), published.UpdatedAtUtc);

@@ -230,6 +230,21 @@ public class PublicTournamentsHandlerTests
     }
 
     [Fact]
+    public async Task BySlug_Json_NeverCarriesTheInternalTournamentId()
+    {
+        var h = new PublicTournamentsTestHarness();
+        var id = Guid.NewGuid();
+        h.Tournaments.Items.Add(Record(organization: Organization(Consent()), id: id));
+
+        var result = await h.BySlug.Handle(new GetPublicTournamentBySlugQuery("open-norte-abc123"), CancellationToken.None);
+
+        var json = JsonSerializer.Serialize(result.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var document = JsonDocument.Parse(json);
+        Assert.DoesNotContain("id", AllPropertyNames(document.RootElement));
+        Assert.DoesNotContain(id.ToString(), json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Response_Json_ExposesOnlyTheDocumentedFields()
     {
         var response = new PublicTournamentResponse(

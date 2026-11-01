@@ -20,7 +20,9 @@ public interface IPublicTournamentReadRepository
 /// Public-safe projection of a tournament. Catalog ids are carried only so the application can resolve display
 /// names; they are never exposed. Admin-only columns (observations, courts, points, sum value, owner ids) are not read.
 /// </summary>
+/// <param name="Id">Tournament id, for internal lookups only (its published draw); never part of a public response.</param>
 public sealed record PublicTournamentRecord(
+    Guid Id,
     string Slug,
     string Name,
     string? Description,

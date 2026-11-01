@@ -18,7 +18,7 @@ public static class TournamentDrawResponseMapper
     /// <param name="status">Stored status (a preview is a draft).</param>
     /// <param name="publishedAtUtc">Publication time, UTC.</param>
     /// <param name="options">Effective format options; scoring comes from <see cref="ResolvedDraw.Rules"/>.</param>
-    /// <param name="audience">Public responses drop separation keys and conflicts.</param>
+    /// <param name="audience">Public responses drop separation keys and conflicts (omitted from the JSON).</param>
     public static TournamentDrawResponse ToResponse(
         ResolvedDraw resolved,
         TournamentDrawStatus status,
@@ -53,7 +53,7 @@ public static class TournamentDrawResponseMapper
                     .Select(conflict => new DrawSeparationConflictResponse(
                         conflict.Key, conflict.ParticipantIds, conflict.Kind.ToWireName(), conflict.LocationId))
                     .ToList()
-                : []);
+                : null);
     }
 
     private static DrawOptionsResponse ToOptions(DrawOptions? options, ScoringRules scoring) => new(

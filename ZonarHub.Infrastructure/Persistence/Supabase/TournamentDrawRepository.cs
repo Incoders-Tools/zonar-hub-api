@@ -162,10 +162,12 @@ internal sealed class TournamentDrawRepository : ITournamentDrawRepository
             return null;
 
         var row = rows[0];
+        var (options, scoring) = TournamentDrawJson.ReadOptions(row.Options);
         return new PublishedTournamentDraw(
             row.TournamentId,
             TournamentDrawJson.ReadDraw(row.Structure),
-            TournamentDrawJson.ReadOptions(row.Options).Scoring,
+            options,
+            scoring,
             row.PublishedAtUtc.UtcDateTime,
             row.UpdatedAtUtc.UtcDateTime,
             (row.Results ?? []).Select(ToResult).ToList());

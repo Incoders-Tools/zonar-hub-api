@@ -9,6 +9,7 @@ namespace ZonarHub.Application.Features.TournamentDraws;
 /// <param name="Status"><c>draft</c> or <c>published</c> (a preview is a <c>draft</c>).</param>
 /// <param name="Seed">Seed used, as an unsigned 64-bit decimal string.</param>
 /// <param name="PublishedAt">Publication time; null for drafts.</param>
+/// <param name="SeparationConflicts">Admin only (always a list there); null and omitted from the public draw.</param>
 public sealed record TournamentDrawResponse(
     string Status,
     string Format,
@@ -19,7 +20,8 @@ public sealed record TournamentDrawResponse(
     DrawOptionsResponse Options,
     IReadOnlyList<DrawParticipantResponse> Participants,
     IReadOnlyList<DrawPhaseResponse> Phases,
-    IReadOnlyList<DrawSeparationConflictResponse> SeparationConflicts);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<DrawSeparationConflictResponse>? SeparationConflicts);
 
 /// <summary>Effective options of a draw: absent sections are null; scoring is always present.</summary>
 public sealed record DrawOptionsResponse(

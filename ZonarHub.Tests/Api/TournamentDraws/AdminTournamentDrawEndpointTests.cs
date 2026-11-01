@@ -635,8 +635,9 @@ public class AdminTournamentDrawEndpointTests
             resolved, TournamentDrawStatus.Published, TournamentDrawsTestHarness.Now, record.Options, TournamentDrawAudience.Public);
 
         Assert.All(draw.Participants, p => Assert.Null(p.SeparationKey));
-        Assert.Empty(draw.SeparationConflicts);
+        Assert.Null(draw.SeparationConflicts);
         Assert.DoesNotContain("separationKey", Json(draw));
+        Assert.DoesNotContain("separationConflicts", Json(draw));
         Assert.Equal("2026-10-31T12:00:00Z", JsonDocument.Parse(Json(draw)).RootElement.GetProperty("publishedAt").GetString());
     }
 

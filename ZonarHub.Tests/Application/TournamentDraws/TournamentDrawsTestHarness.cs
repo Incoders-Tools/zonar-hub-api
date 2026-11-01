@@ -164,13 +164,18 @@ internal sealed class InMemoryTournamentDrawRepository(DateTime nowUtc) : ITourn
 
     public MatchResult? ResultRecordedBeforeRecheck { get; set; }
 
-    public TournamentDrawRecord SeedDraft(TournamentAdminDto tournament, TournamentDrawRequestBody body)
+    /// <summary>Tournament ids asked for by <see cref="GetPublishedByTournamentIdAsync"/>.</summary>
+    public List<Guid> PublishedLookups { get; } = [];
+
+    public TournamentDrawRecord SeedDraft(TournamentAdminDto tournament, TournamentDrawRequestBody body) =>
+        SeedDraft(tournament.Id, tournament.OrganizationId, body);
+
+    public TournamentDrawRecord SeedDraft(Guid tournamentId, Guid organizationId, TournamentDrawRequestBody body)
     {
         var submission = TournamentDrawRequestMapper.ToSubmission(body);
         var draw = DrawGenerator.Generate(submission.Value.Seeded);
-        var record = Store(new TournamentDrawDraft(
-            tournament.Id, tournament.OrganizationId, submission.Value.Request, submission.Value.Scoring, draw.Value));
-        return record;
+        return Store(new TournamentDrawDraft(
+            tournamentId, organizationId, submission.Value.Request, submission.Value.Scoring, draw.Value));
     }
 
     public TournamentDrawRecord? Find(Guid tournamentId) =>
@@ -246,8 +251,24 @@ internal sealed class InMemoryTournamentDrawRepository(DateTime nowUtc) : ITourn
         return Task.FromResult(Ordered(drawId));
     }
 
-    public Task<PublishedTournamentDraw?> GetPublishedByTournamentIdAsync(Guid tournamentId, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException("Public reads belong to A4.");
+    /// <summary>Like the store: only a published draw, with its options, scoring and every result (court ids not read).</summary>
+    public Task<PublishedTournamentDraw?> GetPublishedByTournamentIdAsync(Guid tournamentId, CancellationToken cancellationToken = default)
+    {
+        PublishedLookups.Add(tournamentId);
+        var record = Find(tournamentId);
+        if (record is null || record.Status != TournamentDrawStatus.Published)
+            return Task.FromResult<PublishedTournamentDraw?>(null);
+
+        var results = Ordered(record.Id).Select(result => result with { CourtId = null }).ToList();
+        return Task.FromResult<PublishedTournamentDraw?>(new PublishedTournamentDraw(
+            record.TournamentId,
+            record.Structure,
+            record.Options,
+            record.Scoring,
+            record.PublishedAtUtc!.Value,
+            record.UpdatedAtUtc,
+            results));
+    }
 
     private TournamentDrawRecord Store(TournamentDrawDraft draft)
     {

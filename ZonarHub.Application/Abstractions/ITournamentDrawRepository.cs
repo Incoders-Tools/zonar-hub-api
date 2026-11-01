@@ -105,9 +105,11 @@ public sealed record TournamentDrawSnapshot(TournamentDrawRecord Draw, IReadOnly
 public sealed record TournamentDrawMatchResult(MatchResult Result, Guid? CourtId, DateTime UpdatedAtUtc);
 
 /// <summary>Public read of a published draw. Times are UTC.</summary>
+/// <param name="Options">Effective draw options (absent sections are null).</param>
 public sealed record PublishedTournamentDraw(
     Guid TournamentId,
     Draw Structure,
+    DrawOptions Options,
     ScoringRules Scoring,
     DateTime PublishedAtUtc,
     DateTime UpdatedAtUtc,
