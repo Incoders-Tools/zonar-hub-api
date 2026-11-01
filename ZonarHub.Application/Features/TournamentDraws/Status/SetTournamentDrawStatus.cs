@@ -57,6 +57,6 @@ public sealed class SetTournamentDrawStatusHandler
         }
 
         return Result.Success(TournamentDrawScope.ToAdminResponse(
-            record, TournamentDrawScope.CurrentResults(record.Structure, snapshot.Results)));
+            record, snapshot.Results));
     }
 }

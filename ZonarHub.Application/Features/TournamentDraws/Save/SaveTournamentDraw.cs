@@ -70,6 +70,6 @@ public sealed class SaveTournamentDrawHandler
         // The revision check guarantees the stored results are still the ones read: scheduled rows (court or time only)
         // stay attached, and those of matches the new draw lacks are ignored.
         return Result.Success(TournamentDrawScope.ToAdminResponse(
-            saved.Value, TournamentDrawScope.CurrentResults(saved.Value.Structure, existing?.Results ?? [])));
+            saved.Value, existing?.Results ?? []));
     }
 }

@@ -1,22 +1,27 @@
 using MediatR;
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Application.Features.TournamentDraws;
+using ZonarHub.Application.Features.TournamentDraws.Courts;
 using ZonarHub.Application.Features.TournamentDraws.Delete;
 using ZonarHub.Application.Features.TournamentDraws.Get;
 using ZonarHub.Application.Features.TournamentDraws.Preview;
 using ZonarHub.Application.Features.TournamentDraws.Results;
 using ZonarHub.Application.Features.TournamentDraws.Save;
 using ZonarHub.Application.Features.TournamentDraws.Status;
+using ZonarHub.Domain.Complexes;
+using ZonarHub.Domain.Courts;
 using ZonarHub.Domain.Draws;
 using ZonarHub.Domain.Draws.Results;
+using ZonarHub.Domain.Organizations;
 using ZonarHub.Domain.Users;
+using ZonarHub.Infrastructure.Persistence.InMemory;
 using ZonarHub.Tests.Application.AdminTournaments;
 
 namespace ZonarHub.Tests.Application.TournamentDraws;
 
 /// <summary>
-/// Wires the real draw handlers to the in-memory user/organization stores, the recording tournament repository and an
-/// in-memory draw repository.
+/// Wires the real draw handlers to the in-memory user/organization stores, the recording tournament repository, the
+/// in-memory complex and court repositories and an in-memory draw repository.
 /// </summary>
 internal sealed class TournamentDrawsTestHarness
 {
@@ -26,18 +31,26 @@ internal sealed class TournamentDrawsTestHarness
     {
         Tournaments = new AdminTournamentsListTestHarness(Now);
         Draws = new InMemoryTournamentDrawRepository(Now);
+        Complexes = new InMemoryComplexRepository(new InMemoryComplexStore());
+        Courts = new InMemoryCourtRepository(new InMemoryCourtStore());
         var users = Tournaments.Users;
         Preview = new PreviewTournamentDrawHandler(users.CurrentUser, users.Users, users.Organizations, Tournaments.Tournaments);
         Save = new SaveTournamentDrawHandler(users.CurrentUser, users.Users, users.Organizations, Tournaments.Tournaments, Draws);
         Get = new GetTournamentDrawHandler(users.CurrentUser, users.Users, users.Organizations, Tournaments.Tournaments, Draws);
         Status = new SetTournamentDrawStatusHandler(users.CurrentUser, users.Users, users.Organizations, Tournaments.Tournaments, Draws);
         Delete = new DeleteTournamentDrawHandler(users.CurrentUser, users.Users, users.Organizations, Tournaments.Tournaments, Draws);
-        Record = new RecordMatchResultHandler(users.CurrentUser, users.Users, users.Organizations, Tournaments.Tournaments, Draws);
+        Record = new RecordMatchResultHandler(
+            users.CurrentUser, users.Users, users.Organizations, Tournaments.Tournaments, Draws, Courts, Complexes);
+        ListCourts = new ListTournamentDrawCourtsHandler(
+            users.CurrentUser, users.Users, users.Organizations, Tournaments.Tournaments, Courts, Complexes);
         Sender = new HandlerSender(this);
     }
 
     public AdminTournamentsListTestHarness Tournaments { get; }
     public InMemoryTournamentDrawRepository Draws { get; }
+    public InMemoryComplexRepository Complexes { get; }
+    public InMemoryCourtRepository Courts { get; }
+    public ListTournamentDrawCourtsHandler ListCourts { get; }
     public PreviewTournamentDrawHandler Preview { get; }
     public SaveTournamentDrawHandler Save { get; }
     public GetTournamentDrawHandler Get { get; }
@@ -66,6 +79,38 @@ internal sealed class TournamentDrawsTestHarness
         return tournament;
     }
 
+    /// <summary>A complex of <paramref name="organizationId"/>.</summary>
+    public async Task<Complex> SeedComplexAsync(Guid organizationId, string name = "Club Norte")
+    {
+        var complex = Complex.Reconstitute(
+            new ComplexId(Guid.NewGuid()), new OrganizationId(organizationId), name, null, "Av. 1", null, null, 0, 0,
+            null, null, null, true, Now, Now);
+        await Complexes.AddAsync(complex);
+        return complex;
+    }
+
+    /// <summary>A court of <paramref name="complex"/>.</summary>
+    public async Task<Court> SeedCourtAsync(Complex complex, string name, bool isActive = true)
+    {
+        var court = Court.Reconstitute(new CourtId(Guid.NewGuid()), complex.Id, name, isActive, Now);
+        await Courts.AddAsync(court);
+        return court;
+    }
+
+    /// <summary>Stores <paramref name="tournament"/> at <paramref name="complex"/> with these selected courts.</summary>
+    public async Task<TournamentAdminDto> AtComplexAsync(
+        TournamentAdminDto tournament,
+        Complex? complex,
+        params Court[] selectedCourts)
+    {
+        var placed = tournament with
+        {
+            ComplexId = complex?.Id.Value,
+            SelectedCourtIds = selectedCourts.Select(court => court.Id.Value).ToList(),
+        };
+        return await Tournaments.Tournaments.UpdateAsync(placed);
+    }
+
     /// <summary>Routes each draw request to the matching real handler.</summary>
     private sealed class HandlerSender(TournamentDrawsTestHarness h) : ISender
     {
@@ -79,6 +124,7 @@ internal sealed class TournamentDrawsTestHarness
                 SetTournamentDrawStatusCommand command => await h.Status.Handle(command, cancellationToken),
                 DeleteTournamentDrawCommand command => await h.Delete.Handle(command, cancellationToken),
                 RecordMatchResultCommand command => await h.Record.Handle(command, cancellationToken),
+                ListTournamentDrawCourtsQuery query => await h.ListCourts.Handle(query, cancellationToken),
                 _ => throw new NotSupportedException(request.GetType().Name),
             };
             return (TResponse)result;

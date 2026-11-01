@@ -1,5 +1,6 @@
 using MediatR;
 using ZonarHub.Application.Abstractions;
+using ZonarHub.Application.Features.TournamentDraws.Courts;
 using ZonarHub.Domain.Common;
 using ZonarHub.Domain.Draws.Results;
 using ZonarHub.Domain.Organizations;
@@ -18,22 +19,30 @@ public sealed record RecordMatchResultCommand(Guid TournamentId, string MatchId,
 /// with <c>null</c> and keeps the court and schedule, since the store has no single-result delete. The result is written
 /// at the revision the check was made on (D12): when the draw changed meanwhile (for example another result that would
 /// lock this match), nothing is written and the request fails with <see cref="TournamentDrawErrors.ConcurrentModification"/>.
+/// A <see cref="MatchResultBody.CourtId"/> must be one of the tournament's <see cref="TournamentDrawCourts"/>, otherwise
+/// nothing is written and the request fails with <see cref="TournamentDrawErrors.InvalidCourt"/>; the court's current
+/// name replaces any <see cref="MatchResultBody.CourtName"/> sent with it (D13). Without a court id the free-text name
+/// is stored as sent.
 /// </remarks>
 public sealed class RecordMatchResultHandler
     : IRequestHandler<RecordMatchResultCommand, Result<TournamentDrawResponse>>
 {
     private readonly TournamentDrawScope _scope;
     private readonly ITournamentDrawRepository _draws;
+    private readonly TournamentDrawCourts _courts;
 
     public RecordMatchResultHandler(
         ICurrentUser currentUser,
         IUserRepository users,
         IOrganizationRepository organizations,
         ITournamentAdminRepository tournaments,
-        ITournamentDrawRepository draws)
+        ITournamentDrawRepository draws,
+        ICourtRepository courts,
+        IComplexRepository complexes)
     {
         _scope = new TournamentDrawScope(currentUser, users, organizations, tournaments);
         _draws = draws;
+        _courts = new TournamentDrawCourts(courts, complexes);
     }
 
     public async Task<Result<TournamentDrawResponse>> Handle(
@@ -48,25 +57,35 @@ public sealed class RecordMatchResultHandler
         if (snapshot is null)
             return Result.Failure<TournamentDrawResponse>(TournamentDrawErrors.NotFound);
 
-        var result = TournamentDrawRequestMapper.ToMatchResult(request.MatchId, request.Body);
-        if (result.IsFailure)
-            return Result.Failure<TournamentDrawResponse>(result.Error);
+        var mapped = TournamentDrawRequestMapper.ToMatchResult(request.MatchId, request.Body);
+        if (mapped.IsFailure)
+            return Result.Failure<TournamentDrawResponse>(mapped.Error);
+
+        var result = mapped.Value;
+        if (request.Body.CourtId is { } courtId)
+        {
+            var court = await _courts.FindAsync(tournament.Value, courtId, cancellationToken);
+            if (court is null)
+                return Result.Failure<TournamentDrawResponse>(TournamentDrawErrors.InvalidCourt);
+
+            result = result with { CourtName = court.Name };
+        }
 
         var record = snapshot.Draw;
         var current = TournamentDrawScope.CurrentResults(record.Structure, snapshot.Results);
         var resolved = TournamentDrawScope.Resolve(record.Structure, current, record.Scoring);
-        var allowed = DrawProgression.CanRecordResult(resolved, request.MatchId, result.Value);
+        var allowed = DrawProgression.CanRecordResult(resolved, request.MatchId, result);
         if (allowed.IsFailure)
             return Result.Failure<TournamentDrawResponse>(allowed.Error);
 
         var written = await TournamentDrawScope.WriteAsync(
-            () => _draws.UpsertResultAsync(record.Version, result.Value, request.Body.CourtId, cancellationToken));
+            () => _draws.UpsertResultAsync(record.Version, result, request.Body.CourtId, cancellationToken));
         if (written.IsFailure)
             return Result.Failure<TournamentDrawResponse>(written.Error);
 
-        var updated = current
-            .Where(stored => !string.Equals(stored.MatchId, request.MatchId, StringComparison.Ordinal))
-            .Append(result.Value)
+        var updated = snapshot.Results
+            .Where(stored => !string.Equals(stored.Result.MatchId, request.MatchId, StringComparison.Ordinal))
+            .Append(written.Value.Result)
             .ToList();
         return Result.Success(TournamentDrawScope.ToAdminResponse(record, updated));
     }

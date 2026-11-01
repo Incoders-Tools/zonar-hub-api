@@ -18,18 +18,21 @@ public static class TournamentDrawResponseMapper
     /// <param name="status">Stored status (a preview is a draft).</param>
     /// <param name="publishedAtUtc">Publication time, UTC.</param>
     /// <param name="options">Effective format options; scoring comes from <see cref="ResolvedDraw.Rules"/>.</param>
-    /// <param name="audience">Public responses drop separation keys and conflicts (omitted from the JSON).</param>
+    /// <param name="audience">Public responses drop separation keys, conflicts and court ids (omitted from the JSON).</param>
+    /// <param name="courtIds">Court id of each match result recorded on a court; written for the admin audience only.</param>
     public static TournamentDrawResponse ToResponse(
         ResolvedDraw resolved,
         TournamentDrawStatus status,
         DateTime? publishedAtUtc,
         DrawOptions? options,
-        TournamentDrawAudience audience)
+        TournamentDrawAudience audience,
+        IReadOnlyDictionary<string, Guid>? courtIds = null)
     {
         ArgumentNullException.ThrowIfNull(resolved);
 
         var draw = resolved.Draw;
         var isAdmin = audience == TournamentDrawAudience.Admin;
+        var resultCourtIds = isAdmin ? courtIds : null;
 
         return new TournamentDrawResponse(
             status.ToWireName(),
@@ -47,7 +50,7 @@ public static class TournamentDrawResponseMapper
                     participant.SeedRank,
                     isAdmin ? participant.SeparationKey : null))
                 .ToList(),
-            draw.Phases.Select(phase => ToPhase(resolved, phase)).ToList(),
+            draw.Phases.Select(phase => ToPhase(resolved, phase, resultCourtIds)).ToList(),
             isAdmin
                 ? draw.SeparationConflicts
                     .Select(conflict => new DrawSeparationConflictResponse(
@@ -64,7 +67,10 @@ public static class TournamentDrawResponseMapper
             : null,
         new ScoringOptionsResponse(scoring.BestOf, scoring.ThirdSetSuperTiebreak));
 
-    private static DrawPhaseResponse ToPhase(ResolvedDraw resolved, Phase phase)
+    private static DrawPhaseResponse ToPhase(
+        ResolvedDraw resolved,
+        Phase phase,
+        IReadOnlyDictionary<string, Guid>? courtIds)
     {
         // Resolve computes standings for every group and every round-robin phase, so the lookups always succeed.
         IReadOnlyList<DrawGroupResponse> groups = phase.Kind == PhaseKind.RoundRobin
@@ -83,7 +89,7 @@ public static class TournamentDrawResponseMapper
                     round.Number,
                     round.Name,
                     round.RestingParticipantIds,
-                    round.Matches.Select(match => ToMatch(resolved.FindMatch(match.Id)!)).ToList()))
+                    round.Matches.Select(match => ToMatch(resolved.FindMatch(match.Id)!, courtIds)).ToList()))
                 .ToList());
     }
 
@@ -103,7 +109,7 @@ public static class TournamentDrawResponseMapper
                 row.Position))
             .ToList());
 
-    private static DrawMatchResponse ToMatch(ResolvedMatch resolved)
+    private static DrawMatchResponse ToMatch(ResolvedMatch resolved, IReadOnlyDictionary<string, Guid>? courtIds)
     {
         var match = resolved.Match;
         return new DrawMatchResponse(
@@ -114,7 +120,9 @@ public static class TournamentDrawResponseMapper
             ToSlot(match.Away, resolved.AwayParticipantId),
             match.WinnerAdvancesTo,
             match.LoserAdvancesTo,
-            resolved.Result is { } result ? ToResult(result) : null);
+            resolved.Result is { } result
+                ? ToResult(result, courtIds is not null && courtIds.TryGetValue(match.Id, out var courtId) ? courtId : null)
+                : null);
     }
 
     private static DrawSlotResponse ToSlot(Slot slot, string? resolvedParticipantId) => slot switch
@@ -133,7 +141,7 @@ public static class TournamentDrawResponseMapper
         _ => new DrawSlotResponse(DrawWireNames.SlotKinds.Bye),
     };
 
-    private static DrawMatchResultResponse ToResult(MatchResult result) => new(
+    private static DrawMatchResultResponse ToResult(MatchResult result, Guid? courtId) => new(
         result.Status.ToWireName(),
         result.Sets
             .Select(set => new DrawSetScoreResponse(
@@ -142,6 +150,7 @@ public static class TournamentDrawResponseMapper
                 set.Tiebreak is { } tiebreak ? new TiebreakScoreBody(tiebreak.Home, tiebreak.Away) : null))
             .ToList(),
         result.WinnerSide?.ToWireName(),
+        courtId,
         result.CourtName,
         result.ScheduledAtUtc,
         result.StartedAtUtc,

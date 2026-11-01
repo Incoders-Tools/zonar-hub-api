@@ -27,7 +27,7 @@ public class AdminTournamentDrawEndpointTests
 
     public static TheoryData<string> Operations => new()
     {
-        "preview", "save", "get", "publish", "unpublish", "delete", "result",
+        "preview", "save", "get", "publish", "unpublish", "delete", "result", "courts",
     };
 
     [Theory]
@@ -491,14 +491,14 @@ public class AdminTournamentDrawEndpointTests
         var tournament = await h.OwnTournamentAsync();
         h.Draws.SeedDraft(tournament, Knockout(4));
         var winner = await HomeOfAsync(h, tournament.Id, "KO-R1-M1");
-        var courtId = Guid.NewGuid();
 
         var draw = Draw(await AdminTournamentDrawEndpointsExtensions.RecordResultAsync(
-            tournament.Id, "KO-R1-M1", Completed() with { CourtId = courtId }, h.Sender, CancellationToken.None));
+            tournament.Id, "KO-R1-M1", Completed(), h.Sender, CancellationToken.None));
 
         Assert.Equal(winner, Match(draw, "KO-R2-M1").Home.ResolvedParticipantId);
         var stored = Assert.Single(h.Draws.UpsertedResults);
-        Assert.Equal(courtId, stored.CourtId);
+        Assert.Null(stored.CourtId);
+        Assert.Equal("Court 1", stored.Result.CourtName);
         Assert.Equal(MatchStatus.Completed, stored.Result.Status);
         Assert.Equal(MatchSide.Home, stored.Result.WinnerSide);
         Assert.Equal(new DateTime(2026, 11, 2, 12, 0, 0, DateTimeKind.Utc), stored.Result.ScheduledAtUtc);
@@ -773,6 +773,7 @@ public class AdminTournamentDrawEndpointTests
             [
                 $"DELETE {Route}/",
                 $"GET {Route}/",
+                $"GET {Route}/courts",
                 $"POST {Route}/preview",
                 $"POST {Route}/publish",
                 $"POST {Route}/unpublish",
@@ -806,6 +807,7 @@ public class AdminTournamentDrawEndpointTests
         "publish" => AdminTournamentDrawEndpointsExtensions.PublishAsync(tournamentId, h.Sender, CancellationToken.None),
         "unpublish" => AdminTournamentDrawEndpointsExtensions.UnpublishAsync(tournamentId, h.Sender, CancellationToken.None),
         "delete" => AdminTournamentDrawEndpointsExtensions.DeleteAsync(tournamentId, h.Sender, CancellationToken.None),
+        "courts" => AdminTournamentDrawEndpointsExtensions.ListCourtsAsync(tournamentId, h.Sender, CancellationToken.None),
         _ => AdminTournamentDrawEndpointsExtensions.RecordResultAsync(tournamentId, "KO-R1-M1", Completed(), h.Sender, CancellationToken.None),
     };
 

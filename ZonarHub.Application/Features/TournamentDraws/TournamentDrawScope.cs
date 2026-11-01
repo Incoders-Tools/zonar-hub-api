@@ -97,12 +97,20 @@ internal sealed class TournamentDrawScope
             : throw new InvalidOperationException($"The stored draw cannot be resolved: {resolved.Error.Code}.");
     }
 
-    /// <summary>The admin D7 draw of a stored record with its results.</summary>
-    public static TournamentDrawResponse ToAdminResponse(TournamentDrawRecord record, IReadOnlyCollection<MatchResult> results) =>
+    /// <summary>
+    /// The admin D7 draw of a stored record with its stored results (those that fit the structure, see
+    /// <see cref="CurrentResults"/>) and their court ids.
+    /// </summary>
+    public static TournamentDrawResponse ToAdminResponse(
+        TournamentDrawRecord record,
+        IReadOnlyCollection<TournamentDrawMatchResult> stored) =>
         TournamentDrawResponseMapper.ToResponse(
-            Resolve(record.Structure, results, record.Scoring),
+            Resolve(record.Structure, CurrentResults(record.Structure, stored), record.Scoring),
             record.Status,
             record.PublishedAtUtc,
             record.Options,
-            TournamentDrawAudience.Admin);
+            TournamentDrawAudience.Admin,
+            stored
+                .Where(row => row.CourtId is not null)
+                .ToDictionary(row => row.Result.MatchId, row => row.CourtId!.Value, StringComparer.Ordinal));
 }

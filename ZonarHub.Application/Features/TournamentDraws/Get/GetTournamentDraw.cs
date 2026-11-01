@@ -39,6 +39,6 @@ public sealed class GetTournamentDrawHandler
             return Result.Failure<TournamentDrawResponse>(TournamentDrawErrors.NotFound);
 
         return Result.Success(TournamentDrawScope.ToAdminResponse(
-            snapshot.Draw, TournamentDrawScope.CurrentResults(snapshot.Draw.Structure, snapshot.Results)));
+            snapshot.Draw, snapshot.Results));
     }
 }

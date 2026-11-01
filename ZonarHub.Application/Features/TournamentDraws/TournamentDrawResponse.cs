@@ -101,10 +101,15 @@ public sealed record DrawSlotResponse(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolvedParticipantId = null);
 
 /// <summary>A stored match result. Times are UTC.</summary>
+/// <param name="CourtId">
+/// Court the result was recorded on (D13); admin only, omitted when none was chosen and always in the public draw.
+/// </param>
+/// <param name="CourtName">Court shown for the match: the chosen court's name or the free-text name.</param>
 public sealed record DrawMatchResultResponse(
     string Status,
     IReadOnlyList<DrawSetScoreResponse> Sets,
     string? WinnerSide,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? CourtId,
     string? CourtName,
     DateTime? ScheduledAt,
     DateTime? StartedAt,

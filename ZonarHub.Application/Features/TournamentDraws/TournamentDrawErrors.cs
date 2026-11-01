@@ -24,6 +24,13 @@ public static class TournamentDrawErrors
     public static readonly Error ConcurrentModification =
         Error.Conflict("draws.concurrent_modification", "draws.errors.concurrent_modification");
 
+    /// <summary>
+    /// The result's court id is not one of the tournament's courts (unknown, of another complex or organization, not
+    /// selected for the tournament, or inactive when none are selected) (D13).
+    /// </summary>
+    public static readonly Error InvalidCourt =
+        Error.Validation("draws.results.invalid_court", "draws.errors.results.invalid_court");
+
     /// <summary>The seed is not an unsigned 64-bit decimal string.</summary>
     public static readonly Error InvalidSeed = Error.Validation("draws.invalid_seed", "draws.errors.invalid_seed");
 }

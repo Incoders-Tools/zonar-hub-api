@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using ZonarHub.ApiService.Endpoints.Common;
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Application.Features.TournamentDraws;
+using ZonarHub.Application.Features.TournamentDraws.Courts;
 using ZonarHub.Application.Features.TournamentDraws.Delete;
 using ZonarHub.Application.Features.TournamentDraws.Get;
 using ZonarHub.Application.Features.TournamentDraws.Preview;
@@ -92,14 +93,33 @@ public static class AdminTournamentDrawEndpointsExtensions
         group.MapPut("/matches/{matchId}/result", RecordResultAsync)
             .WithName("RecordAdminTournamentDrawMatchResult")
             .WithSummary("Record, replace or clear a match result")
-            .WithDescription($"Status scheduled|inProgress|completed|walkover|retired, sets [{{ home, away, tiebreak: {{ home, away }} | null }}], winnerSide home|away, optional courtId, courtName and ISO-8601 times (stored in UTC). Status scheduled without sets clears the score. Returns the draw re-resolved. 400 invalid score (draws.results.*), 404 draws.results.unknown_match, 409 draws.results.bye_match, participants_pending or locked_by_next_match. {ConcurrencyDescription}")
+            .WithDescription($"Status scheduled|inProgress|completed|walkover|retired, sets [{{ home, away, tiebreak: {{ home, away }} | null }}], winnerSide home|away, optional courtId, courtName and ISO-8601 times (stored in UTC). courtId must be one of GET draw/courts (400 draws.results.invalid_court otherwise) and stores that court's current name, ignoring courtName; without courtId, courtName is free text. Status scheduled without sets clears the score. Returns the draw re-resolved (admin results carry courtId when set). 400 invalid score (draws.results.*), 404 draws.results.unknown_match, 409 draws.results.bye_match, participants_pending or locked_by_next_match. {ConcurrencyDescription}")
             .Produces<TournamentDrawResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict);
 
+        group.MapGet("/courts", ListCourtsAsync)
+            .WithName("ListAdminTournamentDrawCourts")
+            .WithSummary("List the courts a match result can be recorded on")
+            .WithDescription("Returns [{ id, name }] ordered by name: the tournament's selected courts when it has any, otherwise the active courts of its complex; empty when the tournament has no complex of its own organization. The draw does not need to exist. Use id as courtId in a match result.")
+            .Produces<IReadOnlyList<TournamentDrawCourtResponse>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound);
+
         return app;
+    }
+
+    internal static async Task<IResult> ListCourtsAsync(
+        Guid tournamentId,
+        ISender sender,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new ListTournamentDrawCourtsQuery(tournamentId), cancellationToken);
+        return AdminTournamentsEndpointsExtensions.IsForbidden(result.Error)
+            ? AdminTournamentsEndpointsExtensions.Forbidden(result.Error)
+            : result.Match(courts => (IResult)TypedResults.Ok(courts));
     }
 
     internal static async Task<IResult> PreviewAsync(
