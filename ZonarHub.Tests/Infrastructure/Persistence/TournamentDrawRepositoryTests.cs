@@ -45,6 +45,8 @@ public class TournamentDrawRepositoryTests
 
         var record = snapshot!.Draw;
         Assert.Equal((DrawId, TournamentId, OrganizationId, TournamentDrawStatus.Published), (record.Id, record.TournamentId, record.OrganizationId, record.Status));
+        Assert.Equal(6, record.Revision);
+        Assert.Equal(new TournamentDrawVersion(DrawId, 6), record.Version);
         Assert.Equal(Snapshot(draw), Snapshot(record.Structure));
         Assert.Equal(draw.Seed, record.Structure.Seed);
         Assert.Equal(DrawFormat.SingleElimination, record.Request.Format);
@@ -94,7 +96,7 @@ public class TournamentDrawRepositoryTests
         var repository = CreateRepository([], _ => Json("null"));
 
         Assert.Null(await repository.GetByTournamentIdAsync(TournamentId));
-        Assert.Empty(await repository.ListResultsAsync(DrawId));
+        Assert.Null(await repository.GetPublishedByTournamentIdAsync(TournamentId));
     }
 
     [Fact]
@@ -112,41 +114,43 @@ public class TournamentDrawRepositoryTests
     }
 
     [Fact]
-    public async Task SaveDraft_UpsertsOnTheTournament_WithSnakeCaseColumnsAndVersionedDocuments()
+    public async Task SaveDraft_IsOneRpcCall_WithSnakeCaseParamsTheExpectedVersionAndVersionedDocuments()
     {
         var requests = new List<Recorded>();
-        var repository = CreateRepository(requests, EchoInsertedDraw);
+        var repository = CreateRepository(requests, request => EchoSavedDraw(request, revision: 5));
         var draw = SampleDraw();
         var request = SampleRequest();
         var scoring = new ScoringRules(3, thirdSetSuperTiebreak: false);
 
-        var saved = await repository.SaveDraftAsync(new TournamentDrawDraft(TournamentId, OrganizationId, request, scoring, draw));
+        var saved = await repository.SaveDraftAsync(
+            new TournamentDrawDraft(TournamentId, OrganizationId, request, scoring, draw),
+            new TournamentDrawVersion(DrawId, 4));
 
         var sent = Assert.Single(requests);
         Assert.Equal("POST", sent.Method);
-        Assert.Equal("/rest/v1/tournament_draws", sent.Path);
-        Assert.Equal(["on_conflict=tournament_id", "select=*"], sent.Query);
-        Assert.Equal("resolution=merge-duplicates,return=representation", sent.Prefer);
+        Assert.Equal("/rest/v1/rpc/save_tournament_draw_draft", sent.Path);
+        Assert.Empty(sent.Query);
 
         var body = JsonNode.Parse(sent.Body!)!.AsObject();
         Assert.Equal(
-            ["tournament_id", "organization_id", "status", "format", "participation_format", "randomization_mode", "seed",
-                "options", "request", "structure", "published_at_utc", "updated_at_utc"],
+            ["p_tournament_id", "p_organization_id", "p_expected_draw_id", "p_expected_revision", "p_format",
+                "p_participation_format", "p_randomization_mode", "p_seed", "p_options", "p_request", "p_structure", "p_now_utc"],
             body.Select(property => property.Key));
-        Assert.Equal(TournamentId.ToString(), body["tournament_id"]!.GetValue<string>());
-        Assert.Equal(OrganizationId.ToString(), body["organization_id"]!.GetValue<string>());
-        Assert.Equal("draft", body["status"]!.GetValue<string>());
-        Assert.Equal("singleElimination", body["format"]!.GetValue<string>());
-        Assert.Equal("pair", body["participation_format"]!.GetValue<string>());
-        Assert.Equal("seeded", body["randomization_mode"]!.GetValue<string>());
-        Assert.Equal(draw.Seed.ToString(System.Globalization.CultureInfo.InvariantCulture), body["seed"]!.GetValue<string>());
-        Assert.Equal(TournamentDrawJson.WriteOptions(request.Options, scoring).GetRawText(), body["options"]!.ToJsonString());
-        Assert.Equal(TournamentDrawJson.WriteRequest(request, scoring).GetRawText(), body["request"]!.ToJsonString());
-        Assert.Equal(TournamentDrawJson.WriteDraw(draw).GetRawText(), body["structure"]!.ToJsonString());
-        Assert.Null(body["published_at_utc"]);
-        AssertUtc(Now, body["updated_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
+        Assert.Equal(TournamentId.ToString(), body["p_tournament_id"]!.GetValue<string>());
+        Assert.Equal(OrganizationId.ToString(), body["p_organization_id"]!.GetValue<string>());
+        Assert.Equal(DrawId.ToString(), body["p_expected_draw_id"]!.GetValue<string>());
+        Assert.Equal(4, body["p_expected_revision"]!.GetValue<int>());
+        Assert.Equal("singleElimination", body["p_format"]!.GetValue<string>());
+        Assert.Equal("pair", body["p_participation_format"]!.GetValue<string>());
+        Assert.Equal("seeded", body["p_randomization_mode"]!.GetValue<string>());
+        Assert.Equal(draw.Seed.ToString(System.Globalization.CultureInfo.InvariantCulture), body["p_seed"]!.GetValue<string>());
+        Assert.Equal(TournamentDrawJson.WriteOptions(request.Options, scoring).GetRawText(), body["p_options"]!.ToJsonString());
+        Assert.Equal(TournamentDrawJson.WriteRequest(request, scoring).GetRawText(), body["p_request"]!.ToJsonString());
+        Assert.Equal(TournamentDrawJson.WriteDraw(draw).GetRawText(), body["p_structure"]!.ToJsonString());
+        AssertUtc(Now, body["p_now_utc"]!.GetValue<DateTime>().ToUniversalTime());
 
-        Assert.Equal((DrawId, TournamentDrawStatus.Draft), (saved.Id, saved.Status));
+        Assert.Equal((DrawId, TournamentDrawStatus.Draft, 5), (saved.Id, saved.Status, saved.Revision));
+        Assert.Equal(new TournamentDrawVersion(DrawId, 5), saved.Version);
         Assert.Equal(Snapshot(draw), Snapshot(saved.Structure));
         Assert.False(saved.Scoring.ThirdSetSuperTiebreak);
         Assert.Null(saved.PublishedAtUtc);
@@ -154,132 +158,134 @@ public class TournamentDrawRepositoryTests
     }
 
     [Fact]
-    public async Task SetStatus_Publish_SetsPublishedAtFromTheClock()
+    public async Task SaveDraft_NoDrawExpected_SendsNullExpectedIdAndRevision()
     {
         var requests = new List<Recorded>();
-        var repository = CreateRepository(requests, request => EchoPatchedDraw(request, SampleDraw()));
+        var repository = CreateRepository(requests, request => EchoSavedDraw(request, revision: 0));
 
-        var published = await repository.SetStatusAsync(DrawId, TournamentDrawStatus.Published);
-
-        var sent = Assert.Single(requests);
-        Assert.Equal("PATCH", sent.Method);
-        Assert.Equal("/rest/v1/tournament_draws", sent.Path);
-        Assert.Equal([$"id=eq.{DrawId}", "select=*"], sent.Query);
-        Assert.Equal("return=representation", sent.Prefer);
-        var body = JsonNode.Parse(sent.Body!)!.AsObject();
-        Assert.Equal(["status", "published_at_utc", "updated_at_utc"], body.Select(property => property.Key));
-        Assert.Equal("published", body["status"]!.GetValue<string>());
-        AssertUtc(Now, body["published_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
-        AssertUtc(Now, body["updated_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
-
-        Assert.Equal(TournamentDrawStatus.Published, published!.Status);
-        AssertUtc(Now, published.PublishedAtUtc!.Value);
-    }
-
-    [Fact]
-    public async Task SetStatus_Unpublish_ClearsPublishedAt()
-    {
-        var requests = new List<Recorded>();
-        var repository = CreateRepository(requests, request => EchoPatchedDraw(request, SampleDraw()));
-
-        var draft = await repository.SetStatusAsync(DrawId, TournamentDrawStatus.Draft);
+        var saved = await repository.SaveDraftAsync(
+            new TournamentDrawDraft(TournamentId, OrganizationId, SampleRequest(), ScoringRules.Default, SampleDraw()),
+            expected: null);
 
         var body = JsonNode.Parse(Assert.Single(requests).Body!)!.AsObject();
-        Assert.Equal("draft", body["status"]!.GetValue<string>());
-        Assert.True(body.ContainsKey("published_at_utc"));
-        Assert.Null(body["published_at_utc"]);
-        Assert.Equal(TournamentDrawStatus.Draft, draft!.Status);
-        Assert.Null(draft.PublishedAtUtc);
-    }
+        foreach (var parameter in new[] { "p_expected_draw_id", "p_expected_revision" })
+        {
+            Assert.True(body.ContainsKey(parameter), parameter);
+            Assert.Null(body[parameter]);
+        }
 
-    [Fact]
-    public async Task SetStatus_UnknownDraw_ReturnsNull()
-    {
-        var repository = CreateRepository([], _ => Json("[]"));
-
-        Assert.Null(await repository.SetStatusAsync(DrawId, TournamentDrawStatus.Published));
+        Assert.Equal(0, saved.Revision);
     }
 
     [Theory]
-    [InlineData("[{\"id\":\"00000000-0000-0000-0000-0000000000d1\"}]", true)]
-    [InlineData("[]", false)]
-    public async Task DeleteDraft_DeletesOnlyADraft_AndReportsWhetherOneWasDeleted(string response, bool expected)
+    [InlineData(TournamentDrawStatus.Published, "published")]
+    [InlineData(TournamentDrawStatus.Draft, "draft")]
+    public async Task SetStatus_IsOneRpcCall_WithTheExpectedRevisionAndTheClock(TournamentDrawStatus status, string wire)
     {
         var requests = new List<Recorded>();
-        var repository = CreateRepository(requests, _ => Json(response));
+        var publishedAt = status == TournamentDrawStatus.Published ? "2026-10-31T12:30:00+00:00" : null;
+        var repository = CreateRepository(requests, _ => Json(DrawRowJson(SampleDraw(), status: wire, publishedAt: publishedAt, revision: 8)));
 
-        var deleted = await repository.DeleteDraftAsync(DrawId);
-
-        Assert.Equal(expected, deleted);
-        var sent = Assert.Single(requests);
-        Assert.Equal("DELETE", sent.Method);
-        Assert.Equal("/rest/v1/tournament_draws", sent.Path);
-        Assert.Equal([$"id=eq.{DrawId}", "status=eq.draft", "select=id"], sent.Query);
-        Assert.Equal("return=representation", sent.Prefer);
-    }
-
-    [Fact]
-    public async Task UpsertResult_IsOneUpsertOnDrawAndMatch_WithSnakeCaseColumns()
-    {
-        var requests = new List<Recorded>();
-        var repository = CreateRepository(requests, EchoResult);
-        var result = SampleResult();
-
-        var stored = await repository.UpsertResultAsync(DrawId, result, CourtId);
+        var updated = await repository.SetStatusAsync(new TournamentDrawVersion(DrawId, 7), status);
 
         var sent = Assert.Single(requests);
         Assert.Equal("POST", sent.Method);
-        Assert.Equal("/rest/v1/tournament_draw_match_results", sent.Path);
-        Assert.Equal(["on_conflict=draw_id,match_id", "select=*"], sent.Query);
-        Assert.Equal("resolution=merge-duplicates,return=representation", sent.Prefer);
+        Assert.Equal("/rest/v1/rpc/set_tournament_draw_status", sent.Path);
+        Assert.Empty(sent.Query);
+        var body = JsonNode.Parse(sent.Body!)!.AsObject();
+        Assert.Equal(["p_draw_id", "p_expected_revision", "p_status", "p_now_utc"], body.Select(property => property.Key));
+        Assert.Equal(DrawId.ToString(), body["p_draw_id"]!.GetValue<string>());
+        Assert.Equal(7, body["p_expected_revision"]!.GetValue<int>());
+        Assert.Equal(wire, body["p_status"]!.GetValue<string>());
+        AssertUtc(Now, body["p_now_utc"]!.GetValue<DateTime>().ToUniversalTime());
+
+        Assert.Equal((status, 8), (updated.Status, updated.Revision));
+        Assert.Equal(status == TournamentDrawStatus.Published ? Now : null, updated.PublishedAtUtc);
+    }
+
+    [Fact]
+    public async Task DeleteDraft_IsOneRpcCall_WithTheExpectedRevision()
+    {
+        var requests = new List<Recorded>();
+        var repository = CreateRepository(requests, _ => Json($$"""{"id":"{{DrawId}}","revision":3}"""));
+
+        await repository.DeleteDraftAsync(new TournamentDrawVersion(DrawId, 2));
+
+        var sent = Assert.Single(requests);
+        Assert.Equal("POST", sent.Method);
+        Assert.Equal("/rest/v1/rpc/delete_tournament_draw_draft", sent.Path);
+        Assert.Empty(sent.Query);
+        var body = JsonNode.Parse(sent.Body!)!.AsObject();
+        Assert.Equal(["p_draw_id", "p_expected_revision"], body.Select(property => property.Key));
+        Assert.Equal(DrawId.ToString(), body["p_draw_id"]!.GetValue<string>());
+        Assert.Equal(2, body["p_expected_revision"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task UpsertResult_IsOneRpcCall_WithSnakeCaseParamsAndReturnsTheNewRevision()
+    {
+        var requests = new List<Recorded>();
+        var repository = CreateRepository(requests, request => EchoResult(request, revision: 10));
+        var result = SampleResult();
+
+        var stored = await repository.UpsertResultAsync(new TournamentDrawVersion(DrawId, 9), result, CourtId);
+
+        var sent = Assert.Single(requests);
+        Assert.Equal("POST", sent.Method);
+        Assert.Equal("/rest/v1/rpc/upsert_tournament_draw_match_result", sent.Path);
+        Assert.Empty(sent.Query);
         var body = JsonNode.Parse(sent.Body!)!.AsObject();
         Assert.Equal(
-            ["draw_id", "match_id", "status", "sets", "winner_side", "court_id", "court_name", "scheduled_at_utc",
-                "started_at_utc", "finished_at_utc", "updated_at_utc"],
+            ["p_draw_id", "p_expected_revision", "p_match_id", "p_status", "p_sets", "p_winner_side", "p_court_id",
+                "p_court_name", "p_scheduled_at_utc", "p_started_at_utc", "p_finished_at_utc", "p_now_utc"],
             body.Select(property => property.Key));
-        Assert.Equal(DrawId.ToString(), body["draw_id"]!.GetValue<string>());
-        Assert.Equal("KO-R1-M1", body["match_id"]!.GetValue<string>());
-        Assert.Equal("completed", body["status"]!.GetValue<string>());
+        Assert.Equal(DrawId.ToString(), body["p_draw_id"]!.GetValue<string>());
+        Assert.Equal(9, body["p_expected_revision"]!.GetValue<int>());
+        Assert.Equal("KO-R1-M1", body["p_match_id"]!.GetValue<string>());
+        Assert.Equal("completed", body["p_status"]!.GetValue<string>());
         Assert.Equal(
             """[{"home":7,"away":6,"tiebreak":{"home":7,"away":4}},{"home":3,"away":6,"tiebreak":null},{"home":10,"away":8,"tiebreak":null}]""",
-            body["sets"]!.ToJsonString());
-        Assert.Equal("home", body["winner_side"]!.GetValue<string>());
-        Assert.Equal(CourtId.ToString(), body["court_id"]!.GetValue<string>());
-        Assert.Equal("Central", body["court_name"]!.GetValue<string>());
-        AssertUtc(new DateTime(2026, 10, 31, 9, 0, 0, DateTimeKind.Utc), body["scheduled_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
-        AssertUtc(new DateTime(2026, 10, 31, 9, 5, 0, DateTimeKind.Utc), body["started_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
-        AssertUtc(new DateTime(2026, 10, 31, 10, 35, 0, DateTimeKind.Utc), body["finished_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
-        AssertUtc(Now, body["updated_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
+            body["p_sets"]!.ToJsonString());
+        Assert.Equal("home", body["p_winner_side"]!.GetValue<string>());
+        Assert.Equal(CourtId.ToString(), body["p_court_id"]!.GetValue<string>());
+        Assert.Equal("Central", body["p_court_name"]!.GetValue<string>());
+        AssertUtc(new DateTime(2026, 10, 31, 9, 0, 0, DateTimeKind.Utc), body["p_scheduled_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
+        AssertUtc(new DateTime(2026, 10, 31, 9, 5, 0, DateTimeKind.Utc), body["p_started_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
+        AssertUtc(new DateTime(2026, 10, 31, 10, 35, 0, DateTimeKind.Utc), body["p_finished_at_utc"]!.GetValue<DateTime>().ToUniversalTime());
+        AssertUtc(Now, body["p_now_utc"]!.GetValue<DateTime>().ToUniversalTime());
 
-        AssertSampleResult(stored, CourtId, Now);
+        Assert.Equal(10, stored.Revision);
+        AssertSampleResult(stored.Result, CourtId, Now);
     }
 
     [Fact]
     public async Task UpsertResult_ScheduledWithoutDetails_SendsNullsAndAnEmptySetList()
     {
         var requests = new List<Recorded>();
-        var repository = CreateRepository(requests, EchoResult);
+        var repository = CreateRepository(requests, request => EchoResult(request, revision: 1));
 
-        var stored = await repository.UpsertResultAsync(DrawId, new MatchResult("RR-R1-M1", MatchStatus.Scheduled), courtId: null);
+        var stored = await repository.UpsertResultAsync(
+            new TournamentDrawVersion(DrawId, 0), new MatchResult("RR-R1-M1", MatchStatus.Scheduled), courtId: null);
 
         var body = JsonNode.Parse(Assert.Single(requests).Body!)!.AsObject();
-        Assert.Equal("scheduled", body["status"]!.GetValue<string>());
-        Assert.Equal("[]", body["sets"]!.ToJsonString());
-        foreach (var column in new[] { "winner_side", "court_id", "court_name", "scheduled_at_utc", "started_at_utc", "finished_at_utc" })
+        Assert.Equal("scheduled", body["p_status"]!.GetValue<string>());
+        Assert.Equal("[]", body["p_sets"]!.ToJsonString());
+        foreach (var parameter in new[] { "p_winner_side", "p_court_id", "p_court_name", "p_scheduled_at_utc", "p_started_at_utc", "p_finished_at_utc" })
         {
-            Assert.True(body.ContainsKey(column), column);
-            Assert.Null(body[column]);
+            Assert.True(body.ContainsKey(parameter), parameter);
+            Assert.Null(body[parameter]);
         }
 
-        Assert.Equal((MatchStatus.Scheduled, null, null), (stored.Result.Status, stored.Result.WinnerSide, stored.CourtId));
-        Assert.Empty(stored.Result.Sets);
+        var row = stored.Result;
+        Assert.Equal((MatchStatus.Scheduled, null, null), (row.Result.Status, row.Result.WinnerSide, row.CourtId));
+        Assert.Empty(row.Result.Sets);
     }
 
     [Fact]
     public async Task UpsertResult_LocalTimesAreConverted_AndUnspecifiedTimesAreTakenAsUtc()
     {
         var requests = new List<Recorded>();
-        var repository = CreateRepository(requests, EchoResult);
+        var repository = CreateRepository(requests, request => EchoResult(request, revision: 1));
         var scheduled = new DateTime(2026, 10, 31, 9, 0, 0, DateTimeKind.Utc);
         var result = new MatchResult(
             "RR-R1-M1",
@@ -287,13 +293,68 @@ public class TournamentDrawRepositoryTests
             scheduledAtUtc: scheduled.ToLocalTime(),
             startedAtUtc: new DateTime(2026, 10, 31, 9, 5, 0, DateTimeKind.Unspecified));
 
-        var stored = await repository.UpsertResultAsync(DrawId, result, courtId: null);
+        var stored = await repository.UpsertResultAsync(new TournamentDrawVersion(DrawId, 0), result, courtId: null);
 
         var body = JsonNode.Parse(Assert.Single(requests).Body!)!.AsObject();
-        Assert.Equal("2026-10-31T09:00:00Z", body["scheduled_at_utc"]!.GetValue<string>());
-        Assert.Equal("2026-10-31T09:05:00Z", body["started_at_utc"]!.GetValue<string>());
-        AssertUtc(scheduled, stored.Result.ScheduledAtUtc!.Value);
-        AssertUtc(new DateTime(2026, 10, 31, 9, 5, 0, DateTimeKind.Utc), stored.Result.StartedAtUtc!.Value);
+        Assert.Equal("2026-10-31T09:00:00Z", body["p_scheduled_at_utc"]!.GetValue<string>());
+        Assert.Equal("2026-10-31T09:05:00Z", body["p_started_at_utc"]!.GetValue<string>());
+        AssertUtc(scheduled, stored.Result.Result.ScheduledAtUtc!.Value);
+        AssertUtc(new DateTime(2026, 10, 31, 9, 5, 0, DateTimeKind.Utc), stored.Result.Result.StartedAtUtc!.Value);
+    }
+
+    public static TheoryData<string, string, TournamentDrawWriteConflict> WriteConflicts()
+    {
+        var data = new TheoryData<string, string, TournamentDrawWriteConflict>();
+        foreach (var operation in new[] { "save", "status", "delete", "result" })
+        {
+            data.Add(operation, "draws.concurrent_modification", TournamentDrawWriteConflict.ConcurrentModification);
+            data.Add(operation, "draws.results_exist", TournamentDrawWriteConflict.ResultsExist);
+            data.Add(operation, "draws.not_draft", TournamentDrawWriteConflict.NotDraft);
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(WriteConflicts))]
+    public async Task Writes_RejectedByTheStore_ThrowTheTypedConflict(string operation, string message, TournamentDrawWriteConflict expected)
+    {
+        var repository = CreateRepository([], _ => Problem(HttpStatusCode.Conflict, "PT409", message));
+
+        var error = await Assert.ThrowsAsync<TournamentDrawConcurrencyException>(() => WriteAsync(repository, operation));
+
+        Assert.Equal(expected, error.Conflict);
+    }
+
+    [Theory]
+    [InlineData("save")]
+    [InlineData("status")]
+    [InlineData("delete")]
+    [InlineData("result")]
+    public async Task Writes_OtherFailures_StayHttpRequestExceptions(string operation)
+    {
+        var unknownMessage = CreateRepository([], _ => Problem(HttpStatusCode.Conflict, "PT409", "draws.something_else"));
+        var otherCode = CreateRepository([], _ => Problem(HttpStatusCode.Conflict, "23505", "draws.concurrent_modification"));
+        var badRequest = CreateRepository([], _ => Problem(HttpStatusCode.BadRequest, "PT409", "draws.concurrent_modification"));
+        var notJson = CreateRepository([], _ => new HttpResponseMessage(HttpStatusCode.Conflict) { Content = new StringContent("conflict") });
+        var nullBody = CreateRepository([], _ => new HttpResponseMessage(HttpStatusCode.Conflict) { Content = new StringContent("null") });
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => WriteAsync(unknownMessage, operation));
+        await Assert.ThrowsAsync<HttpRequestException>(() => WriteAsync(otherCode, operation));
+        await Assert.ThrowsAsync<HttpRequestException>(() => WriteAsync(badRequest, operation));
+        await Assert.ThrowsAsync<HttpRequestException>(() => WriteAsync(notJson, operation));
+        await Assert.ThrowsAsync<HttpRequestException>(() => WriteAsync(nullBody, operation));
+    }
+
+    [Theory]
+    [InlineData("save")]
+    [InlineData("status")]
+    [InlineData("result")]
+    public async Task Writes_EmptyRpcResult_AreRejected(string operation)
+    {
+        var repository = CreateRepository([], _ => Json("null"));
+
+        await Assert.ThrowsAsync<JsonException>(() => WriteAsync(repository, operation));
     }
 
     [Fact]
@@ -310,21 +371,6 @@ public class TournamentDrawRepositoryTests
         using var scope = provider.CreateScope();
 
         Assert.IsType<TournamentDrawRepository>(scope.ServiceProvider.GetRequiredService<ITournamentDrawRepository>());
-    }
-
-    [Fact]
-    public async Task ListResults_FiltersByDraw_OrderedByMatch()
-    {
-        var requests = new List<Recorded>();
-        var repository = CreateRepository(requests, _ => Json($"[{ResultRowJson()}]"));
-
-        var results = await repository.ListResultsAsync(DrawId);
-
-        var sent = Assert.Single(requests);
-        Assert.Equal("GET", sent.Method);
-        Assert.Equal("/rest/v1/tournament_draw_match_results", sent.Path);
-        Assert.Equal(["select=*", $"draw_id=eq.{DrawId}", "order=match_id.asc"], sent.Query);
-        AssertSampleResult(Assert.Single(results), CourtId);
     }
 
     [Fact]
@@ -370,20 +416,32 @@ public class TournamentDrawRepositoryTests
     [Fact]
     public async Task StoreFailure_ThrowsHttpRequestException_ForEveryOperation()
     {
-        var repository = CreateRepository([], _ => new HttpResponseMessage(HttpStatusCode.Conflict)
-        {
-            Content = new StringContent("""{"code":"23503","message":"insert or update violates foreign key constraint"}"""),
-        });
+        var repository = CreateRepository([], _ => Problem(HttpStatusCode.Conflict, "23503", "insert or update violates foreign key constraint"));
 
         await Assert.ThrowsAsync<HttpRequestException>(() => repository.GetByTournamentIdAsync(TournamentId));
-        await Assert.ThrowsAsync<HttpRequestException>(() => repository.SaveDraftAsync(
-            new TournamentDrawDraft(TournamentId, OrganizationId, SampleRequest(), ScoringRules.Default, SampleDraw())));
-        await Assert.ThrowsAsync<HttpRequestException>(() => repository.SetStatusAsync(DrawId, TournamentDrawStatus.Published));
-        await Assert.ThrowsAsync<HttpRequestException>(() => repository.DeleteDraftAsync(DrawId));
-        await Assert.ThrowsAsync<HttpRequestException>(() => repository.UpsertResultAsync(DrawId, SampleResult(), null));
-        await Assert.ThrowsAsync<HttpRequestException>(() => repository.ListResultsAsync(DrawId));
+        foreach (var operation in new[] { "save", "status", "delete", "result" })
+            await Assert.ThrowsAsync<HttpRequestException>(() => WriteAsync(repository, operation));
         await Assert.ThrowsAsync<HttpRequestException>(() => repository.GetPublishedByTournamentIdAsync(TournamentId));
     }
+
+    private static Task WriteAsync(TournamentDrawRepository repository, string operation) => operation switch
+    {
+        "save" => repository.SaveDraftAsync(
+            new TournamentDrawDraft(TournamentId, OrganizationId, SampleRequest(), ScoringRules.Default, SampleDraw()),
+            new TournamentDrawVersion(DrawId, 1)),
+        "status" => repository.SetStatusAsync(new TournamentDrawVersion(DrawId, 1), TournamentDrawStatus.Published),
+        "delete" => repository.DeleteDraftAsync(new TournamentDrawVersion(DrawId, 1)),
+        _ => repository.UpsertResultAsync(new TournamentDrawVersion(DrawId, 1), SampleResult(), null),
+    };
+
+    /// <summary>A PostgREST error body (a function's <c>RAISE ... USING ERRCODE</c> keeps its message).</summary>
+    private static HttpResponseMessage Problem(HttpStatusCode status, string code, string message) => new(status)
+    {
+        Content = new StringContent(
+            new JsonObject { ["code"] = code, ["message"] = message, ["details"] = null, ["hint"] = null }.ToJsonString(),
+            Encoding.UTF8,
+            "application/json"),
+    };
 
     private static Draw SampleDraw() => Generate(SingleElimination(
         Participants(4, i => i),
@@ -428,7 +486,12 @@ public class TournamentDrawRepositoryTests
     }
 
     /// <summary>A stored draw row as PostgREST returns it (offset timestamps), optionally with embedded results.</summary>
-    private static string DrawRowJson(Draw draw, string status = "published", string? publishedAt = "2026-10-30T09:00:00+00:00", string? results = null)
+    private static string DrawRowJson(
+        Draw draw,
+        string status = "published",
+        string? publishedAt = "2026-10-30T09:00:00+00:00",
+        string? results = null,
+        int revision = 6)
     {
         var row = new JsonObject
         {
@@ -446,6 +509,7 @@ public class TournamentDrawRepositoryTests
             ["published_at_utc"] = publishedAt,
             ["created_at_utc"] = "2026-10-29T08:00:00+00:00",
             ["updated_at_utc"] = "2026-10-30T09:00:00+00:00",
+            ["revision"] = revision,
         };
         if (results is not null)
             row["results"] = JsonNode.Parse(results);
@@ -471,29 +535,34 @@ public class TournamentDrawRepositoryTests
         }
         """;
 
-    /// <summary>Echoes an upserted draw the way PostgREST returns it: the sent columns plus the generated ones.</summary>
-    private static HttpResponseMessage EchoInsertedDraw(HttpRequestMessage request)
+    /// <summary>
+    /// Echoes the save function the way it answers: the draw row (<c>to_jsonb</c>) built from the sent parameters, a
+    /// draft without publication time, plus the generated columns.
+    /// </summary>
+    private static HttpResponseMessage EchoSavedDraw(HttpRequestMessage request, int revision)
     {
-        var row = JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!.AsObject();
-        row["id"] = DrawId.ToString();
+        var sent = JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!.AsObject();
+        var row = new JsonObject { ["id"] = DrawId.ToString(), ["status"] = "draft", ["published_at_utc"] = null };
+        foreach (var column in new[] { "tournament_id", "organization_id", "format", "participation_format", "randomization_mode", "seed", "options", "request", "structure" })
+            row[column] = sent[$"p_{column}"]!.DeepClone();
+
         row["created_at_utc"] = "2026-10-29T08:00:00+00:00";
-        return Json(new JsonArray(row).ToJsonString());
+        row["updated_at_utc"] = sent["p_now_utc"]!.DeepClone();
+        row["revision"] = revision;
+        return Json(row.ToJsonString());
     }
 
-    private static HttpResponseMessage EchoPatchedDraw(HttpRequestMessage request, Draw draw)
+    /// <summary>Echoes the result function: <c>{ revision, result }</c> with the row built from the sent parameters.</summary>
+    private static HttpResponseMessage EchoResult(HttpRequestMessage request, int revision)
     {
-        var row = JsonNode.Parse(DrawRowJson(draw))!.AsObject();
-        foreach (var (column, value) in JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!.AsObject())
-            row[column] = value?.DeepClone();
+        var sent = JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!.AsObject();
+        var row = new JsonObject();
+        foreach (var column in new[] { "draw_id", "match_id", "status", "sets", "winner_side", "court_id", "court_name", "scheduled_at_utc", "started_at_utc", "finished_at_utc" })
+            row[column] = sent[$"p_{column}"]?.DeepClone();
 
-        return Json(new JsonArray(row).ToJsonString());
-    }
-
-    private static HttpResponseMessage EchoResult(HttpRequestMessage request)
-    {
-        var row = JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!.AsObject();
         row["created_at_utc"] = "2026-10-31T09:00:00+00:00";
-        return Json(new JsonArray(row).ToJsonString());
+        row["updated_at_utc"] = sent["p_now_utc"]!.DeepClone();
+        return Json(new JsonObject { ["revision"] = revision, ["result"] = row }.ToJsonString());
     }
 
     private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)

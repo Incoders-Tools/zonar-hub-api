@@ -145,9 +145,11 @@ internal static class TournamentDrawBodies
 }
 
 /// <summary>
-/// Map-backed <see cref="ITournamentDrawRepository"/> that records every write. <see cref="SimulateConcurrentDelete"/>
-/// makes status changes and deletes behave as if the draw vanished between the caller's read and the write;
-/// <see cref="ResultRecordedBeforeRecheck"/> is stored when the caller re-lists results (a result recorded meanwhile).
+/// Map-backed <see cref="ITournamentDrawRepository"/> that models the store functions (D12): every write checks the
+/// expected <see cref="TournamentDrawVersion"/>, then the stored state (results, draft), and bumps the revision.
+/// Seeding counts as a write by someone else, so <see cref="BeforeNextWrite"/> can commit a concurrent change between the
+/// caller's read and its write. <see cref="Writes"/> lists only the accepted writes, <see cref="RejectedWrites"/> the
+/// refused ones.
 /// </summary>
 internal sealed class InMemoryTournamentDrawRepository(DateTime nowUtc) : ITournamentDrawRepository
 {
@@ -156,13 +158,20 @@ internal sealed class InMemoryTournamentDrawRepository(DateTime nowUtc) : ITourn
 
     public List<string> Writes { get; } = [];
 
+    public List<(string Write, TournamentDrawWriteConflict Conflict)> RejectedWrites { get; } = [];
+
     public List<TournamentDrawDraft> SavedDrafts { get; } = [];
 
     public List<(Guid DrawId, MatchResult Result, Guid? CourtId)> UpsertedResults { get; } = [];
 
-    public bool SimulateConcurrentDelete { get; set; }
+    /// <summary>Runs once right before the next write is checked: a change committed by another writer meanwhile.</summary>
+    public Action? BeforeNextWrite { get; set; }
 
-    public MatchResult? ResultRecordedBeforeRecheck { get; set; }
+    /// <summary>
+    /// Makes the next write fail with this conflict after its version check passes, as the store function does when its
+    /// own state check fails (only reachable when the table was written without the functions).
+    /// </summary>
+    public TournamentDrawWriteConflict? RejectNextWrite { get; set; }
 
     /// <summary>Tournament ids asked for by <see cref="GetPublishedByTournamentIdAsync"/>.</summary>
     public List<Guid> PublishedLookups { get; } = [];
@@ -181,8 +190,12 @@ internal sealed class InMemoryTournamentDrawRepository(DateTime nowUtc) : ITourn
     public TournamentDrawRecord? Find(Guid tournamentId) =>
         _draws.Values.SingleOrDefault(draw => draw.TournamentId == tournamentId);
 
-    public void SeedResult(Guid tournamentId, MatchResult result) =>
-        Results(Find(tournamentId)!.Id)[result.MatchId] = new TournamentDrawMatchResult(result, null, nowUtc);
+    public void SeedResult(Guid tournamentId, MatchResult result, Guid? courtId = null)
+    {
+        var record = Find(tournamentId)!;
+        Results(record.Id)[result.MatchId] = new TournamentDrawMatchResult(result, courtId, nowUtc);
+        Bump(record);
+    }
 
     public void SeedStatus(Guid tournamentId, TournamentDrawStatus status)
     {
@@ -191,7 +204,16 @@ internal sealed class InMemoryTournamentDrawRepository(DateTime nowUtc) : ITourn
         {
             Status = status,
             PublishedAtUtc = status == TournamentDrawStatus.Published ? nowUtc : null,
+            Revision = record.Revision + 1,
         };
+    }
+
+    /// <summary>Removes the tournament's draw and its results, as a concurrent delete would.</summary>
+    public void SeedDeleted(Guid tournamentId)
+    {
+        var record = Find(tournamentId)!;
+        _draws.Remove(record.Id);
+        _results.Remove(record.Id);
     }
 
     public Task<TournamentDrawSnapshot?> GetByTournamentIdAsync(Guid tournamentId, CancellationToken cancellationToken = default)
@@ -200,55 +222,75 @@ internal sealed class InMemoryTournamentDrawRepository(DateTime nowUtc) : ITourn
         return Task.FromResult(record is null ? null : new TournamentDrawSnapshot(record, Ordered(record.Id)));
     }
 
-    public Task<TournamentDrawRecord> SaveDraftAsync(TournamentDrawDraft draft, CancellationToken cancellationToken = default)
+    public Task<TournamentDrawRecord> SaveDraftAsync(
+        TournamentDrawDraft draft,
+        TournamentDrawVersion? expected,
+        CancellationToken cancellationToken = default)
     {
+        RunConcurrentWrite();
+        var existing = Find(draft.TournamentId);
+        if (existing?.Version != expected)
+            Reject("save", TournamentDrawWriteConflict.ConcurrentModification);
+        if (existing is not null && HasStartedResults(existing.Id))
+            Reject("save", TournamentDrawWriteConflict.ResultsExist);
+        CheckForcedRejection("save");
+
         Writes.Add("save");
         SavedDrafts.Add(draft);
         return Task.FromResult(Store(draft));
     }
 
-    public Task<TournamentDrawRecord?> SetStatusAsync(Guid drawId, TournamentDrawStatus status, CancellationToken cancellationToken = default)
+    public Task<TournamentDrawRecord> SetStatusAsync(
+        TournamentDrawVersion expected,
+        TournamentDrawStatus status,
+        CancellationToken cancellationToken = default)
     {
-        Writes.Add($"status:{status}");
-        if (SimulateConcurrentDelete || !_draws.TryGetValue(drawId, out var record))
-            return Task.FromResult<TournamentDrawRecord?>(null);
+        var write = $"status:{status}";
+        var record = Expect(write, expected);
+        CheckForcedRejection(write);
 
+        Writes.Add(write);
         var updated = record with
         {
             Status = status,
             PublishedAtUtc = status == TournamentDrawStatus.Published ? nowUtc : null,
             UpdatedAtUtc = nowUtc,
+            Revision = record.Revision + 1,
         };
-        _draws[drawId] = updated;
-        return Task.FromResult<TournamentDrawRecord?>(updated);
+        _draws[record.Id] = updated;
+        return Task.FromResult(updated);
     }
 
-    public Task<bool> DeleteDraftAsync(Guid drawId, CancellationToken cancellationToken = default)
+    public Task DeleteDraftAsync(TournamentDrawVersion expected, CancellationToken cancellationToken = default)
     {
+        var record = Expect("delete", expected);
+        if (HasStartedResults(record.Id))
+            Reject("delete", TournamentDrawWriteConflict.ResultsExist);
+        if (record.Status != TournamentDrawStatus.Draft)
+            Reject("delete", TournamentDrawWriteConflict.NotDraft);
+        CheckForcedRejection("delete");
+
         Writes.Add("delete");
-        if (SimulateConcurrentDelete || !_draws.TryGetValue(drawId, out var record) || record.Status != TournamentDrawStatus.Draft)
-            return Task.FromResult(false);
-
-        _draws.Remove(drawId);
-        _results.Remove(drawId);
-        return Task.FromResult(true);
+        _draws.Remove(record.Id);
+        _results.Remove(record.Id);
+        return Task.CompletedTask;
     }
 
-    public Task<TournamentDrawMatchResult> UpsertResultAsync(Guid drawId, MatchResult result, Guid? courtId, CancellationToken cancellationToken = default)
+    public Task<RecordedTournamentDrawResult> UpsertResultAsync(
+        TournamentDrawVersion expected,
+        MatchResult result,
+        Guid? courtId,
+        CancellationToken cancellationToken = default)
     {
-        Writes.Add($"result:{result.MatchId}");
-        UpsertedResults.Add((drawId, result, courtId));
+        var write = $"result:{result.MatchId}";
+        var record = Expect(write, expected);
+        CheckForcedRejection(write);
+
+        Writes.Add(write);
+        UpsertedResults.Add((record.Id, result, courtId));
         var stored = new TournamentDrawMatchResult(result, courtId, nowUtc);
-        Results(drawId)[result.MatchId] = stored;
-        return Task.FromResult(stored);
-    }
-
-    public Task<IReadOnlyList<TournamentDrawMatchResult>> ListResultsAsync(Guid drawId, CancellationToken cancellationToken = default)
-    {
-        if (ResultRecordedBeforeRecheck is { } recorded)
-            Results(drawId)[recorded.MatchId] = new TournamentDrawMatchResult(recorded, null, nowUtc);
-
-        return Task.FromResult(Ordered(drawId));
+        Results(record.Id)[result.MatchId] = stored;
+        return Task.FromResult(new RecordedTournamentDrawResult(stored, Bump(record).Revision));
     }
 
     /// <summary>Like the store: only a published draw, with its options, scoring and every result (court ids not read).</summary>
@@ -270,6 +312,49 @@ internal sealed class InMemoryTournamentDrawRepository(DateTime nowUtc) : ITourn
             results));
     }
 
+    /// <summary>The draw at <paramref name="expected"/>; a missing draw or another revision is a concurrent change.</summary>
+    private TournamentDrawRecord Expect(string write, TournamentDrawVersion expected)
+    {
+        RunConcurrentWrite();
+        if (!_draws.TryGetValue(expected.DrawId, out var record) || record.Revision != expected.Revision)
+            Reject(write, TournamentDrawWriteConflict.ConcurrentModification);
+
+        return record!;
+    }
+
+    private void RunConcurrentWrite()
+    {
+        var concurrent = BeforeNextWrite;
+        BeforeNextWrite = null;
+        concurrent?.Invoke();
+    }
+
+    private void CheckForcedRejection(string write)
+    {
+        if (RejectNextWrite is { } conflict)
+        {
+            RejectNextWrite = null;
+            Reject(write, conflict);
+        }
+    }
+
+    private void Reject(string write, TournamentDrawWriteConflict conflict)
+    {
+        RejectedWrites.Add((write, conflict));
+        throw new TournamentDrawConcurrencyException(conflict);
+    }
+
+    private bool HasStartedResults(Guid drawId) =>
+        Results(drawId).Values.Any(stored => stored.Result.Status != MatchStatus.Scheduled);
+
+    private TournamentDrawRecord Bump(TournamentDrawRecord record)
+    {
+        var bumped = record with { Revision = record.Revision + 1 };
+        _draws[record.Id] = bumped;
+        return bumped;
+    }
+
+    /// <summary>Inserts at revision 0 or replaces the draw as a draft at the next revision, keeping id and creation time.</summary>
     private TournamentDrawRecord Store(TournamentDrawDraft draft)
     {
         var existing = Find(draft.TournamentId);
@@ -284,7 +369,8 @@ internal sealed class InMemoryTournamentDrawRepository(DateTime nowUtc) : ITourn
             draft.Scoring,
             null,
             existing?.CreatedAtUtc ?? nowUtc,
-            nowUtc);
+            nowUtc,
+            existing is null ? 0 : existing.Revision + 1);
         _draws[record.Id] = record;
         return record;
     }

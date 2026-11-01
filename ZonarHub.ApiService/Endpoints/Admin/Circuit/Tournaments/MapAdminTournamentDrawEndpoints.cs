@@ -26,6 +26,9 @@ public static class AdminTournamentDrawEndpointsExtensions
     private const string RequestDescription =
         "Enum values are camelCase (format singleElimination|roundRobin|groupsThenKnockout, participationFormat individual|pair|team, randomization.mode random|seeded). randomization.seed is an unsigned 64-bit decimal string; when absent or blank the API generates one and returns it, and the same request with that seed reproduces the draw. Invalid requests return 400 with a draws.* code.";
 
+    private const string ConcurrencyDescription =
+        "409 draws.concurrent_modification when the draw changed while the request was processed (another write, a delete or a concurrent creation): nothing was written; read the draw again and retry.";
+
     public static IEndpointRouteBuilder MapAdminTournamentDrawEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup(RoutePrefix)
@@ -44,7 +47,7 @@ public static class AdminTournamentDrawEndpointsExtensions
         group.MapPut("/", SaveAsync)
             .WithName("SaveAdminTournamentDraw")
             .WithSummary("Save or replace the draft draw")
-            .WithDescription($"Generates the draw and stores it as a draft (a published draw returns to draft). 409 draws.results_exist when a match has a result other than scheduled. {RequestDescription}")
+            .WithDescription($"Generates the draw and stores it as a draft (a published draw returns to draft). 409 draws.results_exist when a match has a result other than scheduled. {ConcurrencyDescription} {RequestDescription}")
             .Produces<TournamentDrawResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -62,23 +65,25 @@ public static class AdminTournamentDrawEndpointsExtensions
         group.MapPost("/publish", PublishAsync)
             .WithName("PublishAdminTournamentDraw")
             .WithSummary("Publish the draw")
-            .WithDescription("Makes the draw visible publicly when the tournament is public and returns it. Publishing a published draw keeps its publication time. 404 draws.not_found when the tournament has no draw.")
+            .WithDescription($"Makes the draw visible publicly when the tournament is public and returns it. Publishing a published draw keeps its publication time. 404 draws.not_found when the tournament has no draw. {ConcurrencyDescription}")
             .Produces<TournamentDrawResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
         group.MapPost("/unpublish", UnpublishAsync)
             .WithName("UnpublishAdminTournamentDraw")
             .WithSummary("Return the draw to draft")
-            .WithDescription("Hides the draw from the public grid without losing results and returns it. 404 draws.not_found when the tournament has no draw.")
+            .WithDescription($"Hides the draw from the public grid without losing results and returns it. 404 draws.not_found when the tournament has no draw. {ConcurrencyDescription}")
             .Produces<TournamentDrawResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound);
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
         group.MapDelete("/", DeleteAsync)
             .WithName("DeleteAdminTournamentDraw")
             .WithSummary("Delete the draft draw")
-            .WithDescription("Deletes a draft whose matches have no result other than scheduled. 404 draws.not_found when there is no draw, 409 draws.results_exist when results exist, 409 draws.not_draft when the draw is published.")
+            .WithDescription($"Deletes a draft whose matches have no result other than scheduled. 404 draws.not_found when there is no draw, 409 draws.results_exist when results exist, 409 draws.not_draft when the draw is published. {ConcurrencyDescription}")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -87,7 +92,7 @@ public static class AdminTournamentDrawEndpointsExtensions
         group.MapPut("/matches/{matchId}/result", RecordResultAsync)
             .WithName("RecordAdminTournamentDrawMatchResult")
             .WithSummary("Record, replace or clear a match result")
-            .WithDescription("Status scheduled|inProgress|completed|walkover|retired, sets [{ home, away, tiebreak: { home, away } | null }], winnerSide home|away, optional courtId, courtName and ISO-8601 times (stored in UTC). Status scheduled without sets clears the score. Returns the draw re-resolved. 400 invalid score (draws.results.*), 404 draws.results.unknown_match, 409 draws.results.bye_match, participants_pending or locked_by_next_match.")
+            .WithDescription($"Status scheduled|inProgress|completed|walkover|retired, sets [{{ home, away, tiebreak: {{ home, away }} | null }}], winnerSide home|away, optional courtId, courtName and ISO-8601 times (stored in UTC). Status scheduled without sets clears the score. Returns the draw re-resolved. 400 invalid score (draws.results.*), 404 draws.results.unknown_match, 409 draws.results.bye_match, participants_pending or locked_by_next_match. {ConcurrencyDescription}")
             .Produces<TournamentDrawResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)

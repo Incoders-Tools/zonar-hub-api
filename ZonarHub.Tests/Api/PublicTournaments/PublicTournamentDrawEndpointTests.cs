@@ -155,7 +155,7 @@ public class PublicTournamentDrawEndpointTests
         h.Draws.SeedDraft(tournamentId, organizationId, Knockout(4, separationKey: "Club Norte"));
         h.Draws.SeedStatus(tournamentId, TournamentDrawStatus.Published);
         var courtId = Guid.NewGuid();
-        await h.Draws.UpsertResultAsync(h.Draws.Find(tournamentId)!.Id, HomeWin("KO-R1-M1") with { CourtName = "Central" }, courtId);
+        h.Draws.SeedResult(tournamentId, HomeWin("KO-R1-M1") with { CourtName = "Central" }, courtId);
 
         var draw = Draw(await PublicTournamentsEndpointsExtensions.GetDrawAsync(
             Slug, new DefaultHttpContext(), new Sender(h), CancellationToken.None));

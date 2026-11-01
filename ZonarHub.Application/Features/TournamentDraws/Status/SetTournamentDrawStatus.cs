@@ -11,8 +11,10 @@ public sealed record SetTournamentDrawStatusCommand(Guid TournamentId, Tournamen
     : IRequest<Result<TournamentDrawResponse>>;
 
 /// <remarks>
-/// Idempotent: a draw already in the requested status is returned unchanged, so publishing twice keeps the first
-/// publication time.
+/// Idempotent: a draw already in the requested status is returned unchanged (nothing is written), so publishing twice
+/// keeps the first publication time. The change is written at the revision that was read (D12): when the draw changed
+/// or was deleted meanwhile, nothing is written and the request fails with
+/// <see cref="TournamentDrawErrors.ConcurrentModification"/>.
 /// </remarks>
 public sealed class SetTournamentDrawStatusHandler
     : IRequestHandler<SetTournamentDrawStatusCommand, Result<TournamentDrawResponse>>
@@ -46,11 +48,12 @@ public sealed class SetTournamentDrawStatusHandler
         var record = snapshot.Draw;
         if (record.Status != request.TargetStatus)
         {
-            var updated = await _draws.SetStatusAsync(record.Id, request.TargetStatus, cancellationToken);
-            if (updated is null)
-                return Result.Failure<TournamentDrawResponse>(TournamentDrawErrors.NotFound);
+            var updated = await TournamentDrawScope.WriteAsync(
+                () => _draws.SetStatusAsync(record.Version, request.TargetStatus, cancellationToken));
+            if (updated.IsFailure)
+                return Result.Failure<TournamentDrawResponse>(updated.Error);
 
-            record = updated;
+            record = updated.Value;
         }
 
         return Result.Success(TournamentDrawScope.ToAdminResponse(

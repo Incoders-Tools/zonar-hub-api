@@ -15,8 +15,9 @@ public sealed record RecordMatchResultCommand(Guid TournamentId, string MatchId,
 /// The result is checked with <see cref="DrawProgression.CanRecordResult"/> against the draw resolved with its stored
 /// results, so every <see cref="MatchResultErrors"/> code reaches the client unchanged. Clearing is a
 /// <see cref="MatchStatus.Scheduled"/> result without sets or winner: it is subject to the same lock rule as clearing
-/// with <c>null</c> and keeps the court and schedule, since the store has no single-result delete. Two concurrent
-/// results can both pass the lock check of the next match (see <see cref="ITournamentDrawRepository"/>).
+/// with <c>null</c> and keeps the court and schedule, since the store has no single-result delete. The result is written
+/// at the revision the check was made on (D12): when the draw changed meanwhile (for example another result that would
+/// lock this match), nothing is written and the request fails with <see cref="TournamentDrawErrors.ConcurrentModification"/>.
 /// </remarks>
 public sealed class RecordMatchResultHandler
     : IRequestHandler<RecordMatchResultCommand, Result<TournamentDrawResponse>>
@@ -58,7 +59,10 @@ public sealed class RecordMatchResultHandler
         if (allowed.IsFailure)
             return Result.Failure<TournamentDrawResponse>(allowed.Error);
 
-        await _draws.UpsertResultAsync(record.Id, result.Value, request.Body.CourtId, cancellationToken);
+        var written = await TournamentDrawScope.WriteAsync(
+            () => _draws.UpsertResultAsync(record.Version, result.Value, request.Body.CourtId, cancellationToken));
+        if (written.IsFailure)
+            return Result.Failure<TournamentDrawResponse>(written.Error);
 
         var updated = current
             .Where(stored => !string.Equals(stored.MatchId, request.MatchId, StringComparison.Ordinal))

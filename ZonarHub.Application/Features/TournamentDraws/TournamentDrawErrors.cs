@@ -17,6 +17,13 @@ public static class TournamentDrawErrors
     /// <summary>Only a draft can be deleted.</summary>
     public static readonly Error NotDraft = Error.Conflict("draws.not_draft", "draws.errors.not_draft");
 
+    /// <summary>
+    /// The draw changed (or was created or deleted) while the request was processed; nothing was written and the client
+    /// should read the draw again (D12).
+    /// </summary>
+    public static readonly Error ConcurrentModification =
+        Error.Conflict("draws.concurrent_modification", "draws.errors.concurrent_modification");
+
     /// <summary>The seed is not an unsigned 64-bit decimal string.</summary>
     public static readonly Error InvalidSeed = Error.Validation("draws.invalid_seed", "draws.errors.invalid_seed");
 }

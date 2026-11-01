@@ -13,9 +13,9 @@ public sealed record SaveTournamentDrawCommand(Guid TournamentId, TournamentDraw
 
 /// <remarks>
 /// Fails with <see cref="TournamentDrawErrors.ResultsExist"/> while any match of the stored draw has a result other
-/// than scheduled. The results are read again right before saving to narrow the check-then-write window; a result
-/// recorded between that read and the save is still possible (see <see cref="ITournamentDrawRepository"/>) and, if its
-/// match no longer exists, is ignored when the draw is read.
+/// than scheduled. The save is written at the revision that check read (D12): when the draw changed meanwhile (a result
+/// recorded, another save, a delete) or was created by someone else, nothing is saved and the request fails with
+/// <see cref="TournamentDrawErrors.ConcurrentModification"/>.
 /// </remarks>
 public sealed class SaveTournamentDrawHandler
     : IRequestHandler<SaveTournamentDrawCommand, Result<TournamentDrawResponse>>
@@ -55,25 +55,21 @@ public sealed class SaveTournamentDrawHandler
         if (draw.IsFailure)
             return Result.Failure<TournamentDrawResponse>(draw.Error);
 
-        IReadOnlyList<TournamentDrawMatchResult> stored = [];
-        if (existing is not null)
-        {
-            stored = await _draws.ListResultsAsync(existing.Draw.Id, cancellationToken);
-            if (TournamentDrawScope.HasResults(TournamentDrawScope.CurrentResults(existing.Draw.Structure, stored)))
-                return Result.Failure<TournamentDrawResponse>(TournamentDrawErrors.ResultsExist);
-        }
-
-        var saved = await _draws.SaveDraftAsync(
+        var saved = await TournamentDrawScope.WriteAsync(() => _draws.SaveDraftAsync(
             new TournamentDrawDraft(
                 tournament.Value.Id,
                 tournament.Value.OrganizationId,
                 submission.Value.Request,
                 submission.Value.Scoring,
                 draw.Value),
-            cancellationToken);
+            existing?.Draw.Version,
+            cancellationToken));
+        if (saved.IsFailure)
+            return Result.Failure<TournamentDrawResponse>(saved.Error);
 
-        // Remaining scheduled rows (court or time only) stay attached; those of matches the new draw lacks are ignored.
+        // The revision check guarantees the stored results are still the ones read: scheduled rows (court or time only)
+        // stay attached, and those of matches the new draw lacks are ignored.
         return Result.Success(TournamentDrawScope.ToAdminResponse(
-            saved, TournamentDrawScope.CurrentResults(saved.Structure, stored)));
+            saved.Value, TournamentDrawScope.CurrentResults(saved.Value.Structure, existing?.Results ?? [])));
     }
 }

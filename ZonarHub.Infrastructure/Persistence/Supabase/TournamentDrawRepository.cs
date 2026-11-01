@@ -9,19 +9,33 @@ using ZonarHub.Infrastructure.Persistence.Supabase.Draws;
 namespace ZonarHub.Infrastructure.Persistence.Supabase;
 
 /// <summary>
-/// PostgREST store of tournament draws and match results (migration <c>20261031100000_tournament_draws</c>). Each
-/// operation is one HTTP call, so each is atomic in the database; see <see cref="ITournamentDrawRepository"/> for the
-/// races left to callers. Enum columns use <see cref="DrawWireNames"/>, jsonb columns <see cref="TournamentDrawJson"/>,
-/// and timestamps are written and read as UTC. Store failures throw <see cref="HttpRequestException"/>; stored values
-/// outside the contract throw <see cref="JsonException"/>.
+/// PostgREST store of tournament draws and match results (migrations <c>20261031100000_tournament_draws</c> and
+/// <c>20261101100000_tournament_draw_revisions</c>). Reads are table queries; every write is one call to a SQL function
+/// that checks the expected revision and applies the change in one transaction (D12). A function refuses a write with
+/// SQLSTATE <c>PT409</c> (HTTP 409) and a <c>draws.*</c> message, mapped to <see cref="TournamentDrawConcurrencyException"/>.
+/// Enum columns use <see cref="DrawWireNames"/>, jsonb columns <see cref="TournamentDrawJson"/>, and timestamps are
+/// written and read as UTC. Other store failures throw <see cref="HttpRequestException"/>; stored values outside the
+/// contract throw <see cref="JsonException"/>.
 /// </summary>
 internal sealed class TournamentDrawRepository : ITournamentDrawRepository
 {
     private const string DrawsPath = "/rest/v1/tournament_draws";
-    private const string ResultsPath = "/rest/v1/tournament_draw_match_results";
-    private const string UpsertPrefer = "resolution=merge-duplicates,return=representation";
-    private const string ReturnPrefer = "return=representation";
+    private const string SaveDraftRpc = "/rest/v1/rpc/save_tournament_draw_draft";
+    private const string SetStatusRpc = "/rest/v1/rpc/set_tournament_draw_status";
+    private const string DeleteDraftRpc = "/rest/v1/rpc/delete_tournament_draw_draft";
+    private const string UpsertResultRpc = "/rest/v1/rpc/upsert_tournament_draw_match_result";
     private const string WithResults = "select=*,results:tournament_draw_match_results(*)";
+
+    /// <summary>SQLSTATE the draw functions raise to refuse a write; PostgREST answers it with HTTP 409.</summary>
+    private const string RefusedWriteCode = "PT409";
+
+    private static readonly IReadOnlyDictionary<string, TournamentDrawWriteConflict> RefusedWrites =
+        new Dictionary<string, TournamentDrawWriteConflict>(StringComparer.Ordinal)
+        {
+            ["draws.concurrent_modification"] = TournamentDrawWriteConflict.ConcurrentModification,
+            ["draws.results_exist"] = TournamentDrawWriteConflict.ResultsExist,
+            ["draws.not_draft"] = TournamentDrawWriteConflict.NotDraft,
+        };
 
     /// <summary>The published read never selects the submitted request, the owner ids or court ids.</summary>
     private const string PublicSelect =
@@ -50,16 +64,19 @@ internal sealed class TournamentDrawRepository : ITournamentDrawRepository
             : new TournamentDrawSnapshot(ToRecord(rows[0]), (rows[0].Results ?? []).Select(ToResult).ToList());
     }
 
-    public async Task<TournamentDrawRecord> SaveDraftAsync(TournamentDrawDraft draft, CancellationToken cancellationToken = default)
+    public async Task<TournamentDrawRecord> SaveDraftAsync(
+        TournamentDrawDraft draft,
+        TournamentDrawVersion? expected,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(draft);
 
         var structure = draft.Structure;
-        // id and created_at_utc are left out so a replacement keeps them (the conflict update only sets sent columns).
-        var row = new DrawWriteRow(
+        var parameters = new SaveDraftParameters(
             draft.TournamentId,
             draft.OrganizationId,
-            TournamentDrawStatus.Draft.ToWireName(),
+            expected?.DrawId,
+            expected?.Revision,
             structure.Format.ToWireName(),
             structure.ParticipationFormat.ToWireName(),
             structure.RandomizationMode.ToWireName(),
@@ -67,60 +84,42 @@ internal sealed class TournamentDrawRepository : ITournamentDrawRepository
             TournamentDrawJson.WriteOptions(draft.Request.Options, draft.Scoring),
             TournamentDrawJson.WriteRequest(draft.Request, draft.Scoring),
             TournamentDrawJson.WriteDraw(structure),
-            null,
             _clock.UtcNow);
 
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{DrawsPath}?on_conflict=tournament_id&select=*")
-        {
-            Content = JsonContent.Create(row),
-        };
-        request.Headers.Add("Prefer", UpsertPrefer);
-
-        var rows = await SendAsync<DrawRow>(request, cancellationToken);
-        return ToRecord(rows[0]);
+        return ToRecord(await CallAsync<DrawRow>(SaveDraftRpc, parameters, cancellationToken));
     }
 
-    public async Task<TournamentDrawRecord?> SetStatusAsync(
-        Guid drawId,
+    public async Task<TournamentDrawRecord> SetStatusAsync(
+        TournamentDrawVersion expected,
         TournamentDrawStatus status,
         CancellationToken cancellationToken = default)
     {
-        var now = _clock.UtcNow;
-        var patch = new StatusPatch(
-            status.ToWireName(),
-            status == TournamentDrawStatus.Published ? now : null,
-            now);
+        ArgumentNullException.ThrowIfNull(expected);
 
-        var request = new HttpRequestMessage(HttpMethod.Patch, $"{DrawsPath}?id=eq.{drawId}&select=*")
-        {
-            Content = JsonContent.Create(patch),
-        };
-        request.Headers.Add("Prefer", ReturnPrefer);
-
-        var rows = await SendAsync<DrawRow>(request, cancellationToken);
-        return rows.Count == 0 ? null : ToRecord(rows[0]);
+        var parameters = new StatusParameters(expected.DrawId, expected.Revision, status.ToWireName(), _clock.UtcNow);
+        return ToRecord(await CallAsync<DrawRow>(SetStatusRpc, parameters, cancellationToken));
     }
 
-    public async Task<bool> DeleteDraftAsync(Guid drawId, CancellationToken cancellationToken = default)
+    public async Task DeleteDraftAsync(TournamentDrawVersion expected, CancellationToken cancellationToken = default)
     {
-        var url = $"{DrawsPath}?id=eq.{drawId}&status=eq.{TournamentDrawStatus.Draft.ToWireName()}&select=id";
-        var request = new HttpRequestMessage(HttpMethod.Delete, url);
-        request.Headers.Add("Prefer", ReturnPrefer);
+        ArgumentNullException.ThrowIfNull(expected);
 
-        var rows = await SendAsync<JsonElement>(request, cancellationToken);
-        return rows.Count > 0;
+        // The function answers the deleted id and the revision it reached; nothing is left to map.
+        await CallAsync<JsonElement>(DeleteDraftRpc, new DeleteParameters(expected.DrawId, expected.Revision), cancellationToken);
     }
 
-    public async Task<TournamentDrawMatchResult> UpsertResultAsync(
-        Guid drawId,
+    public async Task<RecordedTournamentDrawResult> UpsertResultAsync(
+        TournamentDrawVersion expected,
         MatchResult result,
         Guid? courtId,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(result);
 
-        var row = new ResultWriteRow(
-            drawId,
+        var parameters = new ResultParameters(
+            expected.DrawId,
+            expected.Revision,
             result.MatchId,
             result.Status.ToWireName(),
             TournamentDrawJson.WriteSets(result.Sets),
@@ -132,23 +131,8 @@ internal sealed class TournamentDrawRepository : ITournamentDrawRepository
             Utc(result.FinishedAtUtc),
             _clock.UtcNow);
 
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{ResultsPath}?on_conflict=draw_id,match_id&select=*")
-        {
-            Content = JsonContent.Create(row),
-        };
-        request.Headers.Add("Prefer", UpsertPrefer);
-
-        var rows = await SendAsync<ResultRow>(request, cancellationToken);
-        return ToResult(rows[0]);
-    }
-
-    public async Task<IReadOnlyList<TournamentDrawMatchResult>> ListResultsAsync(
-        Guid drawId,
-        CancellationToken cancellationToken = default)
-    {
-        var url = $"{ResultsPath}?select=*&draw_id=eq.{drawId}&order=match_id.asc";
-        var rows = await SendAsync<ResultRow>(new HttpRequestMessage(HttpMethod.Get, url), cancellationToken);
-        return rows.Select(ToResult).ToList();
+        var recorded = await CallAsync<RecordedResultRow>(UpsertResultRpc, parameters, cancellationToken);
+        return new RecordedTournamentDrawResult(ToResult(recorded.Result), recorded.Revision);
     }
 
     public async Task<PublishedTournamentDraw?> GetPublishedByTournamentIdAsync(
@@ -171,6 +155,48 @@ internal sealed class TournamentDrawRepository : ITournamentDrawRepository
             row.PublishedAtUtc.UtcDateTime,
             row.UpdatedAtUtc.UtcDateTime,
             (row.Results ?? []).Select(ToResult).ToList());
+    }
+
+    /// <summary>
+    /// Calls a draw function (one POST with the named parameters) and reads its jsonb answer. A refused write becomes
+    /// <see cref="TournamentDrawConcurrencyException"/>; any other failure keeps the <see cref="HttpRequestException"/> path.
+    /// </summary>
+    private async Task<T> CallAsync<T>(string path, object parameters, CancellationToken cancellationToken)
+    {
+        using var response = await _http.PostAsJsonAsync(path, parameters, cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict
+            && await ReadRefusedWriteAsync(response, cancellationToken) is { } conflict)
+            throw new TournamentDrawConcurrencyException(conflict);
+
+        response.EnsureSuccessStatusCode();
+        var value = await JsonSerializer.DeserializeAsync<T>(
+            await response.Content.ReadAsStreamAsync(cancellationToken),
+            cancellationToken: cancellationToken);
+
+        return value ?? throw new JsonException($"The function {path} returned no result.");
+    }
+
+    /// <summary>
+    /// The conflict of a PostgREST error body raised by a draw function
+    /// (<c>{"code":"PT409","message":"draws.concurrent_modification", ...}</c>); null for any other 409.
+    /// </summary>
+    private static async Task<TournamentDrawWriteConflict?> ReadRefusedWriteAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        PostgrestError? error;
+        try
+        {
+            error = JsonSerializer.Deserialize<PostgrestError>(await response.Content.ReadAsStringAsync(cancellationToken));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return error?.Code == RefusedWriteCode && error.Message is { } message && RefusedWrites.TryGetValue(message, out var conflict)
+            ? conflict
+            : null;
     }
 
     private async Task<IReadOnlyList<T>> SendAsync<T>(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -202,7 +228,8 @@ internal sealed class TournamentDrawRepository : ITournamentDrawRepository
             scoring,
             row.PublishedAtUtc?.UtcDateTime,
             row.CreatedAtUtc.UtcDateTime,
-            row.UpdatedAtUtc.UtcDateTime);
+            row.UpdatedAtUtc.UtcDateTime,
+            row.Revision);
     }
 
     private static TournamentDrawMatchResult ToResult(ResultRow row) => new(
@@ -231,24 +258,51 @@ internal sealed class TournamentDrawRepository : ITournamentDrawRepository
         var other => DateTime.SpecifyKind(other.Value, DateTimeKind.Utc),
     };
 
-    private sealed record DrawWriteRow(
-        [property: JsonPropertyName("tournament_id")] Guid TournamentId,
-        [property: JsonPropertyName("organization_id")] Guid OrganizationId,
-        [property: JsonPropertyName("status")] string Status,
-        [property: JsonPropertyName("format")] string Format,
-        [property: JsonPropertyName("participation_format")] string ParticipationFormat,
-        [property: JsonPropertyName("randomization_mode")] string RandomizationMode,
-        [property: JsonPropertyName("seed")] string Seed,
-        [property: JsonPropertyName("options")] JsonElement Options,
-        [property: JsonPropertyName("request")] JsonElement Request,
-        [property: JsonPropertyName("structure")] JsonElement Structure,
-        [property: JsonPropertyName("published_at_utc")] DateTime? PublishedAtUtc,
-        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc);
+    private sealed record SaveDraftParameters(
+        [property: JsonPropertyName("p_tournament_id")] Guid TournamentId,
+        [property: JsonPropertyName("p_organization_id")] Guid OrganizationId,
+        [property: JsonPropertyName("p_expected_draw_id")] Guid? ExpectedDrawId,
+        [property: JsonPropertyName("p_expected_revision")] int? ExpectedRevision,
+        [property: JsonPropertyName("p_format")] string Format,
+        [property: JsonPropertyName("p_participation_format")] string ParticipationFormat,
+        [property: JsonPropertyName("p_randomization_mode")] string RandomizationMode,
+        [property: JsonPropertyName("p_seed")] string Seed,
+        [property: JsonPropertyName("p_options")] JsonElement Options,
+        [property: JsonPropertyName("p_request")] JsonElement Request,
+        [property: JsonPropertyName("p_structure")] JsonElement Structure,
+        [property: JsonPropertyName("p_now_utc")] DateTime NowUtc);
 
-    private sealed record StatusPatch(
-        [property: JsonPropertyName("status")] string Status,
-        [property: JsonPropertyName("published_at_utc")] DateTime? PublishedAtUtc,
-        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc);
+    private sealed record StatusParameters(
+        [property: JsonPropertyName("p_draw_id")] Guid DrawId,
+        [property: JsonPropertyName("p_expected_revision")] int ExpectedRevision,
+        [property: JsonPropertyName("p_status")] string Status,
+        [property: JsonPropertyName("p_now_utc")] DateTime NowUtc);
+
+    private sealed record DeleteParameters(
+        [property: JsonPropertyName("p_draw_id")] Guid DrawId,
+        [property: JsonPropertyName("p_expected_revision")] int ExpectedRevision);
+
+    private sealed record ResultParameters(
+        [property: JsonPropertyName("p_draw_id")] Guid DrawId,
+        [property: JsonPropertyName("p_expected_revision")] int ExpectedRevision,
+        [property: JsonPropertyName("p_match_id")] string MatchId,
+        [property: JsonPropertyName("p_status")] string Status,
+        [property: JsonPropertyName("p_sets")] JsonElement Sets,
+        [property: JsonPropertyName("p_winner_side")] string? WinnerSide,
+        [property: JsonPropertyName("p_court_id")] Guid? CourtId,
+        [property: JsonPropertyName("p_court_name")] string? CourtName,
+        [property: JsonPropertyName("p_scheduled_at_utc")] DateTime? ScheduledAtUtc,
+        [property: JsonPropertyName("p_started_at_utc")] DateTime? StartedAtUtc,
+        [property: JsonPropertyName("p_finished_at_utc")] DateTime? FinishedAtUtc,
+        [property: JsonPropertyName("p_now_utc")] DateTime NowUtc);
+
+    private sealed record RecordedResultRow(
+        [property: JsonPropertyName("revision")] int Revision,
+        [property: JsonPropertyName("result")] ResultRow Result);
+
+    private sealed record PostgrestError(
+        [property: JsonPropertyName("code")] string? Code,
+        [property: JsonPropertyName("message")] string? Message);
 
     private sealed record DrawRow(
         [property: JsonPropertyName("id")] Guid Id,
@@ -261,6 +315,7 @@ internal sealed class TournamentDrawRepository : ITournamentDrawRepository
         [property: JsonPropertyName("published_at_utc")] DateTimeOffset? PublishedAtUtc,
         [property: JsonPropertyName("created_at_utc")] DateTimeOffset CreatedAtUtc,
         [property: JsonPropertyName("updated_at_utc")] DateTimeOffset UpdatedAtUtc,
+        [property: JsonPropertyName("revision")] int Revision,
         [property: JsonPropertyName("results")] List<ResultRow>? Results = null);
 
     private sealed record PublishedDrawRow(
@@ -270,19 +325,6 @@ internal sealed class TournamentDrawRepository : ITournamentDrawRepository
         [property: JsonPropertyName("published_at_utc")] DateTimeOffset PublishedAtUtc,
         [property: JsonPropertyName("updated_at_utc")] DateTimeOffset UpdatedAtUtc,
         [property: JsonPropertyName("results")] List<ResultRow>? Results = null);
-
-    private sealed record ResultWriteRow(
-        [property: JsonPropertyName("draw_id")] Guid DrawId,
-        [property: JsonPropertyName("match_id")] string MatchId,
-        [property: JsonPropertyName("status")] string Status,
-        [property: JsonPropertyName("sets")] JsonElement Sets,
-        [property: JsonPropertyName("winner_side")] string? WinnerSide,
-        [property: JsonPropertyName("court_id")] Guid? CourtId,
-        [property: JsonPropertyName("court_name")] string? CourtName,
-        [property: JsonPropertyName("scheduled_at_utc")] DateTime? ScheduledAtUtc,
-        [property: JsonPropertyName("started_at_utc")] DateTime? StartedAtUtc,
-        [property: JsonPropertyName("finished_at_utc")] DateTime? FinishedAtUtc,
-        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc);
 
     private sealed record ResultRow(
         [property: JsonPropertyName("match_id")] string MatchId,

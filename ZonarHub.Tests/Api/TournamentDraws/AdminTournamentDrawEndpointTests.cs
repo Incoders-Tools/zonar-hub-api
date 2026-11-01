@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using ZonarHub.ApiService.Endpoints.Admin.Circuit.Tournaments;
@@ -195,17 +196,142 @@ public class AdminTournamentDrawEndpointTests
     }
 
     [Fact]
-    public async Task Save_ResultRecordedWhileGenerating_IsConflictWithoutSaving()
+    public async Task Save_ResultRecordedWhileGenerating_IsConcurrentModificationWithoutSaving()
+    {
+        var h = new TournamentDrawsTestHarness();
+        var tournament = await h.OwnTournamentAsync();
+        var original = h.Draws.SeedDraft(tournament, Knockout(4));
+        h.Draws.BeforeNextWrite = () => h.Draws.SeedResult(tournament.Id, HomeWin("KO-R1-M1"));
+
+        var result = await AdminTournamentDrawEndpointsExtensions.SaveAsync(tournament.Id, Knockout(4, "99"), h.Sender, CancellationToken.None);
+
+        AssertConcurrentModification(result, h);
+        var stored = (await h.Draws.GetByTournamentIdAsync(tournament.Id))!;
+        Assert.Same(original.Structure, stored.Draw.Structure);
+        Assert.Equal("KO-R1-M1", Assert.Single(stored.Results).Result.MatchId);
+        Assert.Empty(h.Draws.SavedDrafts);
+    }
+
+    [Fact]
+    public async Task Save_DrawCreatedConcurrently_IsConcurrentModificationAndKeepsTheOtherDraw()
+    {
+        var h = new TournamentDrawsTestHarness();
+        var tournament = await h.OwnTournamentAsync();
+        h.Draws.BeforeNextWrite = () => h.Draws.SeedDraft(tournament, Knockout(4, "5"));
+
+        var result = await AdminTournamentDrawEndpointsExtensions.SaveAsync(tournament.Id, Knockout(6, "99"), h.Sender, CancellationToken.None);
+
+        AssertConcurrentModification(result, h);
+        var stored = h.Draws.Find(tournament.Id)!;
+        Assert.Equal(5UL, stored.Structure.Seed);
+        Assert.Equal(0, stored.Revision);
+    }
+
+    public static TheoryData<string> WriteOperations => new() { "save", "publish", "unpublish", "delete", "result" };
+
+    [Theory]
+    [MemberData(nameof(WriteOperations))]
+    public async Task Writes_DrawChangedAfterTheRead_AreConcurrentModificationAndWriteNothing(string operation)
     {
         var h = new TournamentDrawsTestHarness();
         var tournament = await h.OwnTournamentAsync();
         h.Draws.SeedDraft(tournament, Knockout(4));
-        h.Draws.ResultRecordedBeforeRecheck = HomeWin("KO-R1-M1");
+        if (operation == "unpublish")
+            h.Draws.SeedStatus(tournament.Id, TournamentDrawStatus.Published);
+        // Another admin sets the court of a match between this request's read and its write: a change the store would
+        // accept on its own (only a scheduled row), so only the revision can reject the stale write.
+        var concurrent = new MatchResult("KO-R1-M2", MatchStatus.Scheduled, courtName: "Court 9");
+        h.Draws.BeforeNextWrite = () => h.Draws.SeedResult(tournament.Id, concurrent);
+        var before = h.Draws.Find(tournament.Id)!;
 
-        var result = await AdminTournamentDrawEndpointsExtensions.SaveAsync(tournament.Id, Knockout(4, "99"), h.Sender, CancellationToken.None);
+        var result = await InvokeAsync(operation, h, tournament.Id);
 
-        AssertProblem(result, StatusCodes.Status409Conflict, "draws.results_exist");
+        AssertConcurrentModification(result, h);
+        var after = (await h.Draws.GetByTournamentIdAsync(tournament.Id))!;
+        Assert.Equal(before.Revision + 1, after.Draw.Revision);
+        Assert.Equal((before.Status, before.PublishedAtUtc), (after.Draw.Status, after.Draw.PublishedAtUtc));
+        Assert.Same(before.Structure, after.Draw.Structure);
+        Assert.Equal(concurrent, Assert.Single(after.Results).Result);
+        Assert.Empty(h.Draws.SavedDrafts);
+        Assert.Empty(h.Draws.UpsertedResults);
+    }
+
+    [Theory]
+    [MemberData(nameof(WriteOperations))]
+    public async Task Writes_DrawDeletedAfterTheRead_AreConcurrentModificationAndRecreateNothing(string operation)
+    {
+        var h = new TournamentDrawsTestHarness();
+        var tournament = await h.OwnTournamentAsync();
+        h.Draws.SeedDraft(tournament, Knockout(4));
+        if (operation == "unpublish")
+            h.Draws.SeedStatus(tournament.Id, TournamentDrawStatus.Published);
+        h.Draws.BeforeNextWrite = () => h.Draws.SeedDeleted(tournament.Id);
+
+        var result = await InvokeAsync(operation, h, tournament.Id);
+
+        AssertConcurrentModification(result, h);
+        Assert.Null(await h.Draws.GetByTournamentIdAsync(tournament.Id));
+    }
+
+    public static TheoryData<string, TournamentDrawWriteConflict, string> StoreRejections()
+    {
+        var data = new TheoryData<string, TournamentDrawWriteConflict, string>();
+        foreach (var operation in new[] { "save", "publish", "unpublish", "delete", "result" })
+        {
+            data.Add(operation, TournamentDrawWriteConflict.ConcurrentModification, "draws.concurrent_modification");
+            data.Add(operation, TournamentDrawWriteConflict.ResultsExist, "draws.results_exist");
+            data.Add(operation, TournamentDrawWriteConflict.NotDraft, "draws.not_draft");
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(StoreRejections))]
+    public async Task Writes_RejectedByTheStoreAfterTheVersionCheck_MapToTheirConflictCode(
+        string operation,
+        TournamentDrawWriteConflict conflict,
+        string code)
+    {
+        var h = new TournamentDrawsTestHarness();
+        var tournament = await h.OwnTournamentAsync();
+        h.Draws.SeedDraft(tournament, Knockout(4));
+        if (operation == "unpublish")
+            h.Draws.SeedStatus(tournament.Id, TournamentDrawStatus.Published);
+        h.Draws.RejectNextWrite = conflict;
+
+        var result = await InvokeAsync(operation, h, tournament.Id);
+
+        AssertProblem(result, StatusCodes.Status409Conflict, code);
         Assert.Empty(h.Draws.Writes);
+        Assert.Equal(conflict, Assert.Single(h.Draws.RejectedWrites).Conflict);
+    }
+
+    [Fact]
+    public async Task Writes_EachAcceptedWriteBumpsTheRevision_AndEveryRequestWritesAtTheRevisionItRead()
+    {
+        var h = new TournamentDrawsTestHarness();
+        var tournament = await h.OwnTournamentAsync();
+        var clear = new MatchResultBody("scheduled", null, null, null, null, null, null, null);
+        var revisions = new List<int>();
+
+        async Task Step(Func<Task<IResult>> request)
+        {
+            Assert.IsNotType<ProblemHttpResult>(await request());
+            revisions.Add(h.Draws.Find(tournament.Id)?.Revision ?? -1);
+        }
+
+        await Step(() => AdminTournamentDrawEndpointsExtensions.SaveAsync(tournament.Id, Knockout(4), h.Sender, CancellationToken.None));
+        await Step(() => AdminTournamentDrawEndpointsExtensions.SaveAsync(tournament.Id, Knockout(4, "8"), h.Sender, CancellationToken.None));
+        await Step(() => AdminTournamentDrawEndpointsExtensions.PublishAsync(tournament.Id, h.Sender, CancellationToken.None));
+        await Step(() => AdminTournamentDrawEndpointsExtensions.RecordResultAsync(tournament.Id, "KO-R1-M1", Completed(), h.Sender, CancellationToken.None));
+        await Step(() => AdminTournamentDrawEndpointsExtensions.UnpublishAsync(tournament.Id, h.Sender, CancellationToken.None));
+        await Step(() => AdminTournamentDrawEndpointsExtensions.RecordResultAsync(tournament.Id, "KO-R1-M1", clear, h.Sender, CancellationToken.None));
+        await Step(() => AdminTournamentDrawEndpointsExtensions.DeleteAsync(tournament.Id, h.Sender, CancellationToken.None));
+
+        Assert.Equal([0, 1, 2, 3, 4, 5, -1], revisions);
+        Assert.Equal(["save", "save", "status:Published", "result:KO-R1-M1", "status:Draft", "result:KO-R1-M1", "delete"], h.Draws.Writes);
+        Assert.Empty(h.Draws.RejectedWrites);
     }
 
     [Fact]
@@ -303,19 +429,6 @@ public class AdminTournamentDrawEndpointTests
     }
 
     [Fact]
-    public async Task Publish_DrawDeletedMeanwhile_IsNotFound()
-    {
-        var h = new TournamentDrawsTestHarness();
-        var tournament = await h.OwnTournamentAsync();
-        h.Draws.SeedDraft(tournament, Knockout(4));
-        h.Draws.SimulateConcurrentDelete = true;
-
-        var result = await AdminTournamentDrawEndpointsExtensions.PublishAsync(tournament.Id, h.Sender, CancellationToken.None);
-
-        AssertProblem(result, StatusCodes.Status404NotFound, "draws.not_found");
-    }
-
-    [Fact]
     public async Task Delete_DraftWithOnlyScheduledResults_ReturnsNoContent()
     {
         var h = new TournamentDrawsTestHarness();
@@ -358,16 +471,17 @@ public class AdminTournamentDrawEndpointTests
     }
 
     [Fact]
-    public async Task Delete_DraftPublishedOrDeletedMeanwhile_IsConflictNotDraft()
+    public async Task Delete_DraftPublishedMeanwhile_IsConcurrentModificationAndKeepsThePublishedDraw()
     {
         var h = new TournamentDrawsTestHarness();
         var tournament = await h.OwnTournamentAsync();
         h.Draws.SeedDraft(tournament, Knockout(4));
-        h.Draws.SimulateConcurrentDelete = true;
+        h.Draws.BeforeNextWrite = () => h.Draws.SeedStatus(tournament.Id, TournamentDrawStatus.Published);
 
         var result = await AdminTournamentDrawEndpointsExtensions.DeleteAsync(tournament.Id, h.Sender, CancellationToken.None);
 
-        AssertProblem(result, StatusCodes.Status409Conflict, "draws.not_draft");
+        AssertConcurrentModification(result, h);
+        Assert.Equal(TournamentDrawStatus.Published, h.Draws.Find(tournament.Id)!.Status);
     }
 
     [Fact]
@@ -673,6 +787,15 @@ public class AdminTournamentDrawEndpointTests
             Assert.Null(endpoint.Metadata.GetMetadata<IAllowAnonymous>());
             Assert.Contains(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>(), a => a.Policy == "AdminOrAbove");
         }
+
+        // Every draw write can lose the revision race, so each documents 409 draws.concurrent_modification.
+        foreach (var endpoint in endpoints.Where(e => e.RoutePattern.RawText!.EndsWith("/", StringComparison.Ordinal) && e.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Single() != "GET"
+            || e.RoutePattern.RawText!.EndsWith("publish", StringComparison.Ordinal)
+            || e.RoutePattern.RawText!.EndsWith("/result", StringComparison.Ordinal)))
+        {
+            Assert.Contains(endpoint.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>(), p => p.StatusCode == StatusCodes.Status409Conflict);
+            Assert.Contains("draws.concurrent_modification", endpoint.Metadata.GetMetadata<IEndpointDescriptionMetadata>()!.Description, StringComparison.Ordinal);
+        }
     }
 
     private static Task<IResult> InvokeAsync(string operation, TournamentDrawsTestHarness h, Guid tournamentId) => operation switch
@@ -719,5 +842,14 @@ public class AdminTournamentDrawEndpointTests
         var problem = Assert.IsType<ProblemHttpResult>(result);
         Assert.Equal(status, problem.StatusCode);
         Assert.Equal(code, problem.ProblemDetails.Extensions["code"]);
+    }
+
+    /// <summary>409 <c>draws.concurrent_modification</c>, and the store refused the one write the request attempted.</summary>
+    private static void AssertConcurrentModification(IResult result, TournamentDrawsTestHarness h)
+    {
+        AssertProblem(result, StatusCodes.Status409Conflict, "draws.concurrent_modification");
+        Assert.Equal("draws.errors.concurrent_modification", ((ProblemHttpResult)result).ProblemDetails.Detail);
+        Assert.Empty(h.Draws.Writes);
+        Assert.Equal(TournamentDrawWriteConflict.ConcurrentModification, Assert.Single(h.Draws.RejectedWrites).Conflict);
     }
 }

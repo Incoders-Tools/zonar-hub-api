@@ -9,7 +9,8 @@ using ZonarHub.Domain.Users;
 namespace ZonarHub.Application.Features.TournamentDraws;
 
 /// <summary>
-/// Shared steps of the admin draw use cases: the tournament tenant rule and reading a stored draw with its results.
+/// Shared steps of the admin draw use cases: the tournament tenant rule, reading a stored draw with its results and
+/// writing it at the revision that was read (D12).
 /// </summary>
 internal sealed class TournamentDrawScope
 {
@@ -43,9 +44,31 @@ internal sealed class TournamentDrawScope
     }
 
     /// <summary>
-    /// The stored results that fit <paramref name="structure"/>. A result of a match the structure does not have (or of
-    /// a bye) can only be left over from a draw replaced concurrently (see <see cref="ITournamentDrawRepository"/>); it
-    /// is ignored so it can neither break the draw nor block replacing it forever.
+    /// Runs one repository write; a write the store refused becomes its conflict error
+    /// (<see cref="TournamentDrawErrors.ConcurrentModification"/>, <see cref="TournamentDrawErrors.ResultsExist"/> or
+    /// <see cref="TournamentDrawErrors.NotDraft"/>). Nothing was written in that case.
+    /// </summary>
+    public static async Task<Result<T>> WriteAsync<T>(Func<Task<T>> write)
+    {
+        try
+        {
+            return Result.Success(await write());
+        }
+        catch (TournamentDrawConcurrencyException refused)
+        {
+            return Result.Failure<T>(refused.Conflict switch
+            {
+                TournamentDrawWriteConflict.ResultsExist => TournamentDrawErrors.ResultsExist,
+                TournamentDrawWriteConflict.NotDraft => TournamentDrawErrors.NotDraft,
+                _ => TournamentDrawErrors.ConcurrentModification,
+            });
+        }
+    }
+
+    /// <summary>
+    /// The stored results that fit <paramref name="structure"/>. Replacing a draft keeps its scheduled rows (court or
+    /// time only), so a row of a match the new structure does not have (or of a bye) is ignored: it can neither break the
+    /// draw nor block replacing it.
     /// </summary>
     public static IReadOnlyList<MatchResult> CurrentResults(Draw structure, IEnumerable<TournamentDrawMatchResult> stored)
     {
