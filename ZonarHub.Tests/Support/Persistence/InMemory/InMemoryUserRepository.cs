@@ -6,10 +6,17 @@ namespace ZonarHub.Infrastructure.Persistence.InMemory;
 public sealed class InMemoryUserRepository : IUserRepository
 {
     private readonly InMemoryUserStore _store;
+    private readonly InMemoryUserOrganizationAssignmentStore _assignments;
 
     public InMemoryUserRepository(InMemoryUserStore store)
+        : this(store, new InMemoryUserOrganizationAssignmentStore())
+    {
+    }
+
+    public InMemoryUserRepository(InMemoryUserStore store, InMemoryUserOrganizationAssignmentStore assignments)
     {
         _store = store;
+        _assignments = assignments;
     }
 
     public Task<User?> GetByIdAsync(UserId id, CancellationToken cancellationToken = default)
@@ -52,6 +59,12 @@ public sealed class InMemoryUserRepository : IUserRepository
         UserQuery query,
         CancellationToken cancellationToken = default)
     {
+        // Mirrors the Supabase repository, whose membership RPC cannot exclude a role yet.
+        if (query.Membership is not null && query.ExcludeRole is not null)
+        {
+            throw new NotSupportedException("Excluding a role is not supported together with an organization membership filter.");
+        }
+
         IEnumerable<User> source = _store.Data.Values;
 
         if (query.TenantId is { } tenantId)
@@ -72,9 +85,25 @@ public sealed class InMemoryUserRepository : IUserRepository
             source = source.Where(u => u.Role == role);
         }
 
+        if (query.ExcludeRole is { } excludeRole)
+        {
+            source = source.Where(u => u.Role != excludeRole);
+        }
+
         if (query.IsActive is { } isActive)
         {
             source = source.Where(u => u.IsActive == isActive);
+        }
+
+        if (query.Membership is { } membership)
+        {
+            source = source.Where(u => IsMember(u, membership));
+
+            // Mirrors the membership RPC: tenant-scoped lists never include system administrators.
+            if (query.TenantId is not null)
+            {
+                source = source.Where(u => u.Role != UserRole.SystemAdmin);
+            }
         }
 
         var filtered = source
@@ -88,6 +117,23 @@ public sealed class InMemoryUserRepository : IUserRepository
             .ToList();
 
         return Task.FromResult((page, total));
+    }
+
+    private bool IsMember(User user, UserOrganizationMembership membership)
+    {
+        var assigned = _assignments.Data.TryGetValue(user.Id.Value, out var ids)
+            ? ids
+            : new List<Guid>();
+
+        if (user.OrganizationId == membership.OrganizationId || assigned.Contains(membership.OrganizationId))
+        {
+            return true;
+        }
+
+        return membership.IncludeUnassignedOfTenantId is { } tenantId &&
+               user.TenantId == tenantId &&
+               user.OrganizationId is null &&
+               assigned.Count == 0;
     }
 
     public Task AddAsync(User user, CancellationToken cancellationToken = default)

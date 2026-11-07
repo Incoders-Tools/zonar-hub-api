@@ -106,10 +106,25 @@ public sealed class UpdateAdminUserHandler : IRequestHandler<UpdateAdminUserComm
 
         var nextOrganizationId = request.OrganizationId ?? user.OrganizationId ?? organizationIds.FirstOrDefault();
 
-        var organizationScopeValidation = await ValidateOrganizationsScopeAsync(caller, organizationIds, cancellationToken);
+        // Tenant admins never see a foreign or missing primary in the permission matrix, and permission
+        // rows are replaced wholesale, so the retained primary must also be in scope to avoid silently
+        // dropping its hidden rows. Requesting a same-tenant primary repairs the anomaly.
+        var scopedOrganizationIds = AdminUserAuthorization.IsSystemAdmin(caller) ||
+            nextOrganizationId == Guid.Empty ||
+            organizationIds.Contains(nextOrganizationId)
+                ? organizationIds
+                : [.. organizationIds, nextOrganizationId];
+
+        var organizationScopeValidation = await ValidateOrganizationsScopeAsync(caller, scopedOrganizationIds, cancellationToken);
         if (organizationScopeValidation.IsFailure)
         {
             return Result.Failure<AdminUserResponse>(organizationScopeValidation.Error);
+        }
+
+        var storedScopeValidation = await ValidateStoredOrganizationsScopeAsync(caller, user, cancellationToken);
+        if (storedScopeValidation.IsFailure)
+        {
+            return Result.Failure<AdminUserResponse>(storedScopeValidation.Error);
         }
 
         var normalizedPermissions = NormalizePermissions(request.PermissionsByOrganization);
@@ -181,6 +196,33 @@ public sealed class UpdateAdminUserHandler : IRequestHandler<UpdateAdminUserComm
         }
 
         return Result.Success();
+    }
+
+    /// <summary>
+    /// Assignments and permission rows are replaced wholesale, so for tenant admins every stored assignment and
+    /// permission organization must also be in scope; otherwise hidden foreign rows would be silently deleted.
+    /// No exemption applies to an explicitly replaced primary: a foreign primary can only be repaired when it has
+    /// no stored assignment or permission rows, so a repair never deletes cross-tenant data.
+    /// </summary>
+    private async Task<Result> ValidateStoredOrganizationsScopeAsync(
+        User caller,
+        User user,
+        CancellationToken cancellationToken)
+    {
+        if (AdminUserAuthorization.IsSystemAdmin(caller))
+        {
+            return Result.Success();
+        }
+
+        var storedAssignmentIds = await _assignments.GetOrganizationIdsByUserIdAsync(user.Id.Value, cancellationToken);
+        var storedPermissions = await _userPermissions.GetByUserIdAsync(user.Id.Value, cancellationToken);
+        var storedOrganizationIds = storedAssignmentIds
+            .Concat(storedPermissions.Select(permission => permission.OrganizationId))
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToList();
+
+        return await ValidateOrganizationsScopeAsync(caller, storedOrganizationIds, cancellationToken);
     }
 
     private async Task<IReadOnlyDictionary<Guid, string>> ResolveOrganizationNamesAsync(

@@ -30,6 +30,8 @@ public sealed record TournamentResponse(
     bool IsActive,
     IReadOnlyList<Guid> SelectedCourtIds,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    bool IsPublic,
+    string? PublicSlug);
 
 public sealed record TournamentListResponse(IReadOnlyList<TournamentResponse> Items);

@@ -30,5 +30,6 @@ public sealed record UpdateTournamentCommand(
     decimal? SumValue,
     string? Observations,
     bool IsActive,
-    IReadOnlyList<Guid> SelectedCourtIds)
+    IReadOnlyList<Guid> SelectedCourtIds,
+    bool IsPublic = false)
     : IRequest<Result<TournamentResponse>>;

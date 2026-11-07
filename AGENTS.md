@@ -164,6 +164,13 @@ Prefer pluggable logging through infrastructure/composition modules, not ad-hoc 
 - Bind configuration via DI and validate configuration where appropriate
 - Infrastructure registration must stay outside domain logic
 
+### Local and environment configuration
+
+- Runtime secrets and per-environment values come from environment variables using the `__` section separator (`Supabase__Key` → `Supabase:Key`), never from tracked files.
+- For local development, copy `.env.example` to the gitignored `.env` at the repository root; the API loads it only in Development and never overrides variables already set.
+- CORS origins come from `Cors:AllowedOrigins` (`Cors__AllowedOrigins__0`, `__1`, ...); localhost origins live only in `appsettings.Development.json`. Do not hardcode hosts or origins in code.
+- When adding a required runtime variable without a safe tracked default, list its name (no value) in `.env.example`.
+
 ---
 
 ## External integration rules

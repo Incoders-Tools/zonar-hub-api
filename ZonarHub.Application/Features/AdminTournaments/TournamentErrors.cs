@@ -2,8 +2,12 @@ using ZonarHub.Domain.Common;
 
 namespace ZonarHub.Application.Features.AdminTournaments;
 
-internal static class AdminTournamentErrors
+public static class AdminTournamentErrors
 {
+    public static readonly Error Forbidden = Error.Failure(
+        "tournaments.forbidden",
+        "tournaments.errors.forbidden");
+
     public static readonly Error NotFound = Error.NotFound(
         "tournaments.not_found",
         "tournaments.errors.not_found");

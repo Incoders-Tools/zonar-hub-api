@@ -41,6 +41,7 @@ public static class OrganizationsEndpointsExtensions
         group.MapPost("/", CreateAsync)
             .WithName("CreateOrganization")
             .WithSummary("Create a new organization")
+            .WithDescription("publicProfileEnabled is the consent to appear in ZonarHub public sections. Link fields are optional: websiteUrl, instagramUrl, facebookUrl, tiktokUrl and youtubeUrl must be absolute http/https URLs (max 500), contactEmail a valid email (max 254) and whatsappPhone an optional + followed by 8-16 digits. Blank values are stored as null. Invalid values return 400 validation problems keyed by field.")
             .Produces<OrganizationResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
@@ -49,6 +50,7 @@ public static class OrganizationsEndpointsExtensions
         group.MapPut("/{id:guid}", UpdateAsync)
             .WithName("UpdateOrganization")
             .WithSummary("Update an organization")
+            .WithDescription("Full replacement of the editable fields, including the public profile: omitted link fields are cleared. publicProfileEnabled is the consent to appear in ZonarHub public sections. Link fields are optional: websiteUrl, instagramUrl, facebookUrl, tiktokUrl and youtubeUrl must be absolute http/https URLs (max 500), contactEmail a valid email (max 254) and whatsappPhone an optional + followed by 8-16 digits. Blank values are stored as null. Invalid values return 400 validation problems keyed by field.")
             .Produces<OrganizationResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -93,7 +95,7 @@ public static class OrganizationsEndpointsExtensions
         return result.Match(org => (IResult)TypedResults.Ok(org));
     }
 
-    private static async Task<IResult> CreateAsync(
+    internal static async Task<IResult> CreateAsync(
         [FromBody] CreateOrganizationRequest body,
         HttpContext httpContext,
         ISender sender,
@@ -118,13 +120,21 @@ public static class OrganizationsEndpointsExtensions
             body.Description,
             orgType,
             body.LogoUrl,
-            body.CreatedByUserId);
+            body.CreatedByUserId,
+            PublicProfileEnabled: body.PublicProfileEnabled,
+            WebsiteUrl: body.WebsiteUrl,
+            InstagramUrl: body.InstagramUrl,
+            FacebookUrl: body.FacebookUrl,
+            TiktokUrl: body.TiktokUrl,
+            YoutubeUrl: body.YoutubeUrl,
+            WhatsappPhone: body.WhatsappPhone,
+            ContactEmail: body.ContactEmail);
 
         var result = await sender.Send(command, cancellationToken);
         return result.Match(org => TypedResults.Created($"{RoutePrefix}/{org.Id}", org));
     }
 
-    private static async Task<IResult> UpdateAsync(
+    internal static async Task<IResult> UpdateAsync(
         Guid id,
         [FromBody] UpdateOrganizationRequest body,
         HttpContext httpContext,
@@ -146,7 +156,15 @@ public static class OrganizationsEndpointsExtensions
             orgType,
             body.LogoUrl,
             body.IsActive,
-            tenantId);
+            tenantId,
+            PublicProfileEnabled: body.PublicProfileEnabled,
+            WebsiteUrl: body.WebsiteUrl,
+            InstagramUrl: body.InstagramUrl,
+            FacebookUrl: body.FacebookUrl,
+            TiktokUrl: body.TiktokUrl,
+            YoutubeUrl: body.YoutubeUrl,
+            WhatsappPhone: body.WhatsappPhone,
+            ContactEmail: body.ContactEmail);
 
         var result = await sender.Send(command, cancellationToken);
         return result.Match(org => (IResult)TypedResults.Ok(org));
@@ -164,6 +182,9 @@ public static class OrganizationsEndpointsExtensions
     }
 }
 
+/// <summary>
+/// Body of POST /api/admin/organizations, including the optional public-profile consent and contact links.
+/// </summary>
 public sealed record CreateOrganizationRequest(
     Guid? TenantId,
     string DisplayName,
@@ -171,12 +192,31 @@ public sealed record CreateOrganizationRequest(
     string? Description,
     string Type,
     string? LogoUrl,
-    Guid CreatedByUserId);
+    Guid CreatedByUserId,
+    bool PublicProfileEnabled = false,
+    string? WebsiteUrl = null,
+    string? InstagramUrl = null,
+    string? FacebookUrl = null,
+    string? TiktokUrl = null,
+    string? YoutubeUrl = null,
+    string? WhatsappPhone = null,
+    string? ContactEmail = null);
 
+/// <summary>
+/// Body of PUT /api/admin/organizations/{id}; replaces the public-profile consent and contact links.
+/// </summary>
 public sealed record UpdateOrganizationRequest(
     string DisplayName,
     string? LegalName,
     string? Description,
     string Type,
     string? LogoUrl,
-    bool IsActive);
+    bool IsActive,
+    bool PublicProfileEnabled = false,
+    string? WebsiteUrl = null,
+    string? InstagramUrl = null,
+    string? FacebookUrl = null,
+    string? TiktokUrl = null,
+    string? YoutubeUrl = null,
+    string? WhatsappPhone = null,
+    string? ContactEmail = null);

@@ -166,7 +166,16 @@ internal sealed class OrganizationRepository : IOrganizationRepository
             r.IsActive,
             Guid.Parse(r.CreatedByUserId),
             r.CreatedAtUtc,
-            r.UpdatedAtUtc);
+            r.UpdatedAtUtc,
+            OrganizationPublicProfile.Create(
+                r.PublicProfileEnabled,
+                r.WebsiteUrl,
+                r.InstagramUrl,
+                r.FacebookUrl,
+                r.TiktokUrl,
+                r.YoutubeUrl,
+                r.WhatsappPhone,
+                r.ContactEmail));
 
     private static OrganizationRow ToRow(Organization o) => new(
         o.Id.Value.ToString(),
@@ -179,7 +188,15 @@ internal sealed class OrganizationRepository : IOrganizationRepository
         o.IsActive,
         o.CreatedByUserId.ToString(),
         o.CreatedAtUtc,
-        o.UpdatedAtUtc);
+        o.UpdatedAtUtc,
+        o.PublicProfile.Enabled,
+        o.PublicProfile.WebsiteUrl,
+        o.PublicProfile.InstagramUrl,
+        o.PublicProfile.FacebookUrl,
+        o.PublicProfile.TiktokUrl,
+        o.PublicProfile.YoutubeUrl,
+        o.PublicProfile.WhatsappPhone,
+        o.PublicProfile.ContactEmail);
 
     private static OrganizationPatchRow ToPatchRow(Organization o) => new(
         o.DisplayName,
@@ -188,7 +205,15 @@ internal sealed class OrganizationRepository : IOrganizationRepository
         o.Type.ToString().ToLowerInvariant(),
         o.LogoUrl,
         o.IsActive,
-        o.UpdatedAtUtc);
+        o.UpdatedAtUtc,
+        o.PublicProfile.Enabled,
+        o.PublicProfile.WebsiteUrl,
+        o.PublicProfile.InstagramUrl,
+        o.PublicProfile.FacebookUrl,
+        o.PublicProfile.TiktokUrl,
+        o.PublicProfile.YoutubeUrl,
+        o.PublicProfile.WhatsappPhone,
+        o.PublicProfile.ContactEmail);
 
     // ---- DTOs ----
 
@@ -203,7 +228,15 @@ internal sealed class OrganizationRepository : IOrganizationRepository
         [property: JsonPropertyName("is_active")] bool IsActive,
         [property: JsonPropertyName("created_by_user_id")] string CreatedByUserId,
         [property: JsonPropertyName("created_at_utc")] DateTime CreatedAtUtc,
-        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc);
+        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc,
+        [property: JsonPropertyName("public_profile_enabled")] bool PublicProfileEnabled = false,
+        [property: JsonPropertyName("website_url")] string? WebsiteUrl = null,
+        [property: JsonPropertyName("instagram_url")] string? InstagramUrl = null,
+        [property: JsonPropertyName("facebook_url")] string? FacebookUrl = null,
+        [property: JsonPropertyName("tiktok_url")] string? TiktokUrl = null,
+        [property: JsonPropertyName("youtube_url")] string? YoutubeUrl = null,
+        [property: JsonPropertyName("whatsapp_phone")] string? WhatsappPhone = null,
+        [property: JsonPropertyName("contact_email")] string? ContactEmail = null);
 
     private sealed record OrganizationPatchRow(
         [property: JsonPropertyName("display_name")] string DisplayName,
@@ -212,5 +245,13 @@ internal sealed class OrganizationRepository : IOrganizationRepository
         [property: JsonPropertyName("type")] string Type,
         [property: JsonPropertyName("logo_url")] string? LogoUrl,
         [property: JsonPropertyName("is_active")] bool IsActive,
-        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc);
+        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc,
+        [property: JsonPropertyName("public_profile_enabled")] bool PublicProfileEnabled,
+        [property: JsonPropertyName("website_url")] string? WebsiteUrl,
+        [property: JsonPropertyName("instagram_url")] string? InstagramUrl,
+        [property: JsonPropertyName("facebook_url")] string? FacebookUrl,
+        [property: JsonPropertyName("tiktok_url")] string? TiktokUrl,
+        [property: JsonPropertyName("youtube_url")] string? YoutubeUrl,
+        [property: JsonPropertyName("whatsapp_phone")] string? WhatsappPhone,
+        [property: JsonPropertyName("contact_email")] string? ContactEmail);
 }
