@@ -19,14 +19,19 @@ using ZonarHub.ApiService.Endpoints.Admin.System.Roles;
 using ZonarHub.ApiService.Endpoints.Admin.System.Tenants;
 using ZonarHub.ApiService.Endpoints.Admin.System.Users;
 using ZonarHub.ApiService.Endpoints.Admin.Circuit.Tournaments;
+using ZonarHub.ApiService.Configuration;
 using ZonarHub.ApiService.Endpoints.Auth;
 using ZonarHub.ApiService.Endpoints.Common;
+using ZonarHub.ApiService.Endpoints.Public;
 using ZonarHub.ApiService.Security;
 using ZonarHub.ApiService.Endpoints.SystemSettings;
 using ZonarHub.ApiService.Endpoints.UserPreferences;
 using ZonarHub.Application;
 using ZonarHub.Infrastructure.Auth;
 using ZonarHub.Infrastructure.DependencyInjection;
+
+// Development only: load the gitignored repository .env before configuration is built; never overrides set variables.
+var dotEnv = DotEnvFile.LoadForDevelopment([Directory.GetCurrentDirectory(), AppContext.BaseDirectory]);
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -37,19 +42,8 @@ builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ValidationExceptionHandler>();
 builder.Services.AddOpenApi();
 
-builder.Services.AddCors(options =>
-{
-    options.AddDefaultPolicy(policy =>
-    {
-        policy.WithOrigins(
-                  "http://localhost:4200", "https://localhost:4200",
-                  "http://127.0.0.1:4200", "https://127.0.0.1:4200"
-              )
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials();
-    });
-});
+var corsOrigins = CorsConfiguration.ResolveAllowedOrigins(builder.Configuration);
+builder.Services.AddConfiguredCors(corsOrigins);
 
 var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
 var jwtSecret = jwtSection["Secret"] ?? string.Empty;
@@ -86,6 +80,13 @@ builder.Services.AddApiSecurity(builder.Configuration);
 
 var app = builder.Build();
 
+if (dotEnv.Path is not null)
+{
+    app.Logger.LogInformation("Loaded {Count} environment variables from {Path}.", dotEnv.LoadedCount, dotEnv.Path);
+}
+
+CorsConfiguration.LogStartupWarnings(app.Logger, corsOrigins);
+
 app.UseExceptionHandler();
 app.UseCors();
 app.UseApiSecurity();
@@ -116,6 +117,7 @@ app.MapTournamentStatusesEndpoints();
 app.MapTournamentRulesEndpoints();
 app.MapTournamentModalitiesEndpoints();
 app.MapAdminTournamentsEndpoints();
+app.MapPublicTournamentsEndpoints();
 app.MapAdminRolesEndpoints();
 app.MapAdminDashboardEndpoints();
 app.MapCatalogGendersEndpoints();

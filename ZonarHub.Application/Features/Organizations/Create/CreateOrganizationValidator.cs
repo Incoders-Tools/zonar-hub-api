@@ -18,5 +18,6 @@ internal sealed class CreateOrganizationValidator : AbstractValidator<CreateOrga
             .MaximumLength(LegalNameMaxLength).WithMessage("organizations.errors.legal_name_too_long")
             .When(x => x.LegalName is not null);
         RuleFor(x => x.Type).IsInEnum().WithMessage("organizations.errors.type_invalid");
+        this.AddPublicProfileRules();
     }
 }

@@ -1,17 +1,26 @@
 using MediatR;
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Domain.Common;
+using ZonarHub.Domain.Organizations;
+using ZonarHub.Domain.Users;
 
 namespace ZonarHub.Application.Features.AdminTournaments.Update;
 
 public sealed class UpdateTournamentHandler
     : IRequestHandler<UpdateTournamentCommand, Result<TournamentResponse>>
 {
+    private readonly TournamentOrganizationAccess _access;
     private readonly ITournamentAdminRepository _tournaments;
     private readonly IClock _clock;
 
-    public UpdateTournamentHandler(ITournamentAdminRepository tournaments, IClock clock)
+    public UpdateTournamentHandler(
+        ICurrentUser currentUser,
+        IUserRepository users,
+        IOrganizationRepository organizations,
+        ITournamentAdminRepository tournaments,
+        IClock clock)
     {
+        _access = new TournamentOrganizationAccess(currentUser, users, organizations);
         _tournaments = tournaments;
         _clock = clock;
     }
@@ -24,6 +33,11 @@ public sealed class UpdateTournamentHandler
         if (current is null)
         {
             return Result.Failure<TournamentResponse>(AdminTournamentErrors.NotFound);
+        }
+
+        if (!await _access.CanAccessAsync(current.OrganizationId, cancellationToken))
+        {
+            return Result.Failure<TournamentResponse>(AdminTournamentErrors.Forbidden);
         }
 
         var name = (request.Name ?? string.Empty).Trim();
@@ -70,10 +84,13 @@ public sealed class UpdateTournamentHandler
             Observations = request.Observations,
             IsActive = request.IsActive,
             SelectedCourtIds = request.SelectedCourtIds ?? [],
+            IsPublic = request.IsPublic,
             UpdatedAtUtc = _clock.UtcNow
         };
 
-        var updated = await _tournaments.UpdateAsync(dto, cancellationToken);
+        var updated = await TournamentPublicSlugGeneration.SaveAsync(
+            dto,
+            candidate => _tournaments.UpdateAsync(candidate, cancellationToken));
         return Result.Success(TournamentMapper.ToResponse(updated));
     }
 }

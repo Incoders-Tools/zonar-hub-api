@@ -51,7 +51,8 @@ public sealed class CreateOrganizationHandler
             request.Type,
             request.LogoUrl,
             request.CreatedByUserId,
-            _clock.UtcNow);
+            _clock.UtcNow,
+            request.ToPublicProfile());
 
         if (created.IsFailure)
         {

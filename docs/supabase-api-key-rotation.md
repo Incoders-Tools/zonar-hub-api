@@ -42,7 +42,7 @@ Approving one change does not approve the next; the later GitHub actions within 
 | Header behavior | `sb_secret_` keys: `apikey` header only. Legacy JWT keys: `apikey` plus `Authorization: Bearer` (temporary overlap only). |
 | Configuration source | `Supabase__Key` environment/secret-store override. It takes precedence over JSON through standard ASP.NET Core configuration. The tracked JSON value stays empty, so a missing override fails startup. |
 | `Supabase:Url` | Unchanged. Same project URL. |
-| Local development | Developers set `Supabase__Key` in a local environment variable or an explicitly configured external secret store. This API project has no `UserSecretsId`; do not assume .NET user secrets work without configuring them. Never write the key to a tracked file. |
+| Local development | Copy `.env.example` to `.env` at the repository root and set `Supabase__Key` there, or set it as a process environment variable. In Development only, the API loads the gitignored `.env` at startup without overriding variables already set, and logs only the file path and key count. This API project has no `UserSecretsId`; do not assume .NET user secrets work without configuring them. Never write the key to a tracked file. |
 | Git history | Blanking the tracked value does not remove the old key from Git history. The real remediation is disabling legacy keys (change 4). |
 
 ## Local-only API run (current setup)
@@ -59,6 +59,8 @@ Remove-Item Env:Supabase__Key
 ```
 
 Enter the new key only into the no-echo prompt; never paste it into commands, chat, logs, or files in this repository. A process environment variable is temporary but **not an encrypted secret store**: it is available to child processes and may be inspectable by software running as the same user. Do not use `setx`, a persistent user environment variable, or a CLI argument containing the key. The configured project URL already exists in the tracked development JSON; do not override it unless the project changes.
+
+Alternatively, copy `.env.example` to `.env` at the repository root (next to `ZonarHub.slnx`) and set `Supabase__Key` there; `dotnet run --project ZonarHub.ApiService` (launch profile `http`/`https`, `ASPNETCORE_ENVIRONMENT=Development`) loads it before configuration is built. `.env` is gitignored but is a **plaintext file**, not a secret store: keep it out of shared folders and backups, and delete it when no longer needed. A variable already set in the process wins over `.env`, and empty values in `.env` are ignored.
 
 `GET /health` and `GET /` check local startup only; they **do not prove Supabase accepted the key**. After local startup, use a fresh normal user sign-in and a read-only authenticated API `GET` that queries Supabase to check actual access. If the API fails startup or that `GET` fails, stop: do not disable legacy keys. To use AppHost later, verify secret propagation or explicitly configure it in a separate reviewed change; restart the whole AppHost after a key change.
 

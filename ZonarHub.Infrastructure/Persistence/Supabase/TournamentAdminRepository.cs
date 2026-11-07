@@ -8,6 +8,8 @@ namespace ZonarHub.Infrastructure.Persistence.Supabase;
 internal sealed class TournamentAdminRepository : ITournamentAdminRepository
 {
     private const string RestPath = "/rest/v1/tournaments";
+    private const string UniqueViolationCode = "23505";
+    private const string PublicSlugColumn = "public_slug";
 
     private readonly HttpClient _http;
 
@@ -41,6 +43,7 @@ internal sealed class TournamentAdminRepository : ITournamentAdminRepository
         request.Content = JsonContent.Create(row);
 
         using var response = await _http.SendAsync(request, cancellationToken);
+        await ThrowIfPublicSlugConflictAsync(response, tournament, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         var inserted = await response.Content.ReadFromJsonAsync<List<TournamentRow>>(cancellationToken: cancellationToken);
@@ -58,6 +61,7 @@ internal sealed class TournamentAdminRepository : ITournamentAdminRepository
         request.Content = JsonContent.Create(patch);
 
         using var response = await _http.SendAsync(request, cancellationToken);
+        await ThrowIfPublicSlugConflictAsync(response, tournament, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         var updated = await response.Content.ReadFromJsonAsync<List<TournamentRow>>(cancellationToken: cancellationToken);
@@ -69,6 +73,39 @@ internal sealed class TournamentAdminRepository : ITournamentAdminRepository
     {
         using var response = await _http.DeleteAsync($"{RestPath}?id=eq.{id}", cancellationToken);
         response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// PostgREST answers a unique violation with 409 and the Postgres error body
+    /// (<c>{"code":"23505","details":"Key (public_slug)=(...) already exists.", ...}</c>). Only a violation that
+    /// names the public slug becomes <see cref="TournamentPublicSlugConflictException"/>; any other failure keeps
+    /// the existing <see cref="HttpRequestException"/> path.
+    /// </summary>
+    private static async Task ThrowIfPublicSlugConflictAsync(
+        HttpResponseMessage response,
+        TournamentAdminDto tournament,
+        CancellationToken cancellationToken)
+    {
+        if (response.StatusCode != System.Net.HttpStatusCode.Conflict || tournament.PublicSlug is null)
+            return;
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        PostgrestError? error;
+        try
+        {
+            error = JsonSerializer.Deserialize<PostgrestError>(body);
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        if (error?.Code == UniqueViolationCode &&
+            ((error.Details?.Contains(PublicSlugColumn, StringComparison.Ordinal) ?? false) ||
+             (error.Message?.Contains(PublicSlugColumn, StringComparison.Ordinal) ?? false)))
+        {
+            throw new TournamentPublicSlugConflictException(tournament.PublicSlug);
+        }
     }
 
     private async Task<IReadOnlyList<TournamentRow>> ReadRowsAsync(string url, CancellationToken cancellationToken)
@@ -116,7 +153,9 @@ internal sealed class TournamentAdminRepository : ITournamentAdminRepository
         row.IsActive,
         row.SelectedCourtIds ?? [],
         row.CreatedAtUtc,
-        row.UpdatedAtUtc);
+        row.UpdatedAtUtc,
+        row.IsPublic,
+        row.PublicSlug);
 
     private static TournamentRow ToRow(TournamentAdminDto dto) => new(
         dto.Id,
@@ -148,7 +187,9 @@ internal sealed class TournamentAdminRepository : ITournamentAdminRepository
         dto.IsActive,
         dto.SelectedCourtIds.ToList(),
         dto.CreatedAtUtc,
-        dto.UpdatedAtUtc);
+        dto.UpdatedAtUtc,
+        dto.IsPublic,
+        dto.PublicSlug);
 
     private sealed record TournamentRow(
         [property: JsonPropertyName("id")] Guid Id,
@@ -180,5 +221,12 @@ internal sealed class TournamentAdminRepository : ITournamentAdminRepository
         [property: JsonPropertyName("is_active")] bool IsActive,
         [property: JsonPropertyName("selected_court_ids")] List<Guid>? SelectedCourtIds,
         [property: JsonPropertyName("created_at_utc")] DateTime CreatedAtUtc,
-        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc);
+        [property: JsonPropertyName("updated_at_utc")] DateTime UpdatedAtUtc,
+        [property: JsonPropertyName("is_public")] bool IsPublic = false,
+        [property: JsonPropertyName("public_slug")] string? PublicSlug = null);
+
+    private sealed record PostgrestError(
+        [property: JsonPropertyName("code")] string? Code,
+        [property: JsonPropertyName("details")] string? Details,
+        [property: JsonPropertyName("message")] string? Message);
 }
