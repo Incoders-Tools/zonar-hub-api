@@ -8,6 +8,7 @@ namespace ZonarHub.Infrastructure.Persistence.Supabase;
 internal sealed class UserRepository : IUserRepository
 {
     private const string RestPath = "/rest/v1/users";
+    private const string ListByOrganizationRpcPath = "/rest/v1/rpc/list_admin_users_by_organization";
 
     private readonly HttpClient _http;
     private readonly SupabaseOperationContext _ops;
@@ -65,6 +66,17 @@ internal sealed class UserRepository : IUserRepository
         UserQuery query,
         CancellationToken cancellationToken = default)
     {
+        if (query.Membership is { } membership)
+        {
+            // The membership RPC has no role-exclusion argument yet; fail closed rather than leak the role.
+            if (query.ExcludeRole is not null)
+            {
+                throw new NotSupportedException("Excluding a role is not supported together with an organization membership filter.");
+            }
+
+            return await ListByOrganizationAsync(query, membership, cancellationToken);
+        }
+
         var parts = new List<string>
         {
             "select=*",
@@ -88,6 +100,11 @@ internal sealed class UserRepository : IUserRepository
         if (query.Role is { } role)
         {
             parts.Add($"role=eq.{SupabaseQuery.Value(ToStorageRole(role))}");
+        }
+
+        if (query.ExcludeRole is { } excludeRole)
+        {
+            parts.Add($"role=neq.{SupabaseQuery.Value(ToStorageRole(excludeRole))}");
         }
 
         if (query.IsActive is { } isActive)
@@ -121,6 +138,33 @@ internal sealed class UserRepository : IUserRepository
 
         var rows = await resp.Content.ReadFromJsonAsync<List<UserRow>>(cancellationToken) ?? [];
         return (rows.Select(ToDomain).ToList(), totalCount);
+    }
+
+    /// <summary>
+    /// Lists primary-or-assigned members through an RPC, because PostgREST cannot express that
+    /// membership filter before paging and counting.
+    /// </summary>
+    private async Task<(IReadOnlyList<User> Items, int TotalCount)> ListByOrganizationAsync(
+        UserQuery query,
+        UserOrganizationMembership membership,
+        CancellationToken cancellationToken)
+    {
+        var args = new ListByOrganizationArgs(
+            membership.OrganizationId,
+            query.TenantId,
+            membership.IncludeUnassignedOfTenantId,
+            string.IsNullOrWhiteSpace(query.Search) ? null : query.Search.Trim(),
+            query.Role is { } role ? ToStorageRole(role) : null,
+            query.IsActive,
+            Math.Max(0, query.Page - 1) * query.PageSize,
+            query.PageSize);
+
+        using var resp = await _http.PostAsJsonAsync(ListByOrganizationRpcPath, args, cancellationToken);
+        resp.EnsureSuccessStatusCode();
+
+        var page = await resp.Content.ReadFromJsonAsync<UserPageRow>(cancellationToken)
+            ?? throw new InvalidOperationException("User list RPC returned no result.");
+        return (page.Items.Select(ToDomain).ToList(), page.TotalCount);
     }
 
     public Task AddAsync(User user, CancellationToken cancellationToken = default)
@@ -316,6 +360,20 @@ internal sealed class UserRepository : IUserRepository
     };
 
     private sealed record UserExistsRow([property: JsonPropertyName("id")] Guid Id);
+
+    private sealed record ListByOrganizationArgs(
+        [property: JsonPropertyName("p_organization_id")] Guid OrganizationId,
+        [property: JsonPropertyName("p_tenant_id")] Guid? TenantId,
+        [property: JsonPropertyName("p_include_unassigned_tenant_id")] Guid? IncludeUnassignedTenantId,
+        [property: JsonPropertyName("p_search")] string? Search,
+        [property: JsonPropertyName("p_role")] string? Role,
+        [property: JsonPropertyName("p_is_active")] bool? IsActive,
+        [property: JsonPropertyName("p_offset")] int Offset,
+        [property: JsonPropertyName("p_limit")] int Limit);
+
+    private sealed record UserPageRow(
+        [property: JsonPropertyName("total_count")] int TotalCount,
+        [property: JsonPropertyName("items")] List<UserRow> Items);
 
     private sealed record UserRow(
         [property: JsonPropertyName("id")] Guid Id,

@@ -236,11 +236,15 @@ public class AdminUsersLifecycleTests
         var caller = await h.SeedUserAsync(UserRole.Admin, tenantA, "admin-a@zonarhub.dev", "Admin A");
         var sameTenantUser = await h.SeedUserAsync(UserRole.Viewer, tenantA, "viewer-a@zonarhub.dev", "Viewer A");
         var otherTenantUser = await h.SeedUserAsync(UserRole.Admin, tenantB, "admin-b@zonarhub.dev", "Admin B");
+        var organizationA = await h.SeedOrganizationAsync(tenantA, "Org A", caller.Id.Value);
 
         h.CurrentUser.Authenticate(caller.Id.Value, caller.Email);
 
         var result = await h.List.Handle(
-            new GetAdminUsersQuery(new AdminUserFilter(null, null, null, Page: 1, PageSize: 20)),
+            new GetAdminUsersQuery(
+                new AdminUserFilter(null, null, null, Page: 1, PageSize: 20),
+                AdminUserListScopes.Organization,
+                organizationA.Id.Value),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);

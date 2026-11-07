@@ -23,7 +23,7 @@ internal sealed class AdminUsersTestHarness
         AssignmentStore = new InMemoryUserOrganizationAssignmentStore();
         PermissionStore = new InMemoryUserOrganizationPermissionStore();
 
-        Users = new InMemoryUserRepository(UserStore);
+        Users = new InMemoryUserRepository(UserStore, AssignmentStore);
         Organizations = new InMemoryOrganizationRepository(OrganizationStore);
         Assignments = new InMemoryUserOrganizationAssignmentRepository(AssignmentStore);
         UserPermissions = new InMemoryUserOrganizationPermissionRepository(PermissionStore);

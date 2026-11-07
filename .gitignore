@@ -410,3 +410,7 @@ supabase/.docker/
 # Archivos locales sensibles (si aparecen)
 supabase/.env
 supabase/.env.local
+# Local Pi runtime state
+.atl/
+# Local API environment (copy .env.example to .env); never commit real values
+.env

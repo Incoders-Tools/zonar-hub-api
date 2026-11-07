@@ -22,6 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\ZonarHub.ApiService\ZonarHub.ApiService.csproj" />
     <ProjectReference Include="..\ZonarHub.Application\ZonarHub.Application.csproj" />
     <ProjectReference Include="..\ZonarHub.Domain\ZonarHub.Domain.csproj" />
     <ProjectReference Include="..\ZonarHub.Infrastructure\ZonarHub.Infrastructure.csproj" />

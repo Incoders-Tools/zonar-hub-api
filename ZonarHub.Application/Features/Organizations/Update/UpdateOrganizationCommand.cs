@@ -13,4 +13,12 @@ public sealed record UpdateOrganizationCommand(
     OrganizationType Type,
     string? LogoUrl,
     bool IsActive,
-    Guid? RequiredTenantId = null) : IRequest<Result<OrganizationResponse>>;
+    Guid? RequiredTenantId = null,
+    bool PublicProfileEnabled = false,
+    string? WebsiteUrl = null,
+    string? InstagramUrl = null,
+    string? FacebookUrl = null,
+    string? TiktokUrl = null,
+    string? YoutubeUrl = null,
+    string? WhatsappPhone = null,
+    string? ContactEmail = null) : IRequest<Result<OrganizationResponse>>, IOrganizationPublicProfileFields;

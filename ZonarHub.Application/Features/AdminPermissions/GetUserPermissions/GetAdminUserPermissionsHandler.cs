@@ -2,6 +2,7 @@ using MediatR;
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Application.Features.AdminUsers;
 using ZonarHub.Domain.Common;
+using ZonarHub.Domain.Organizations;
 using ZonarHub.Domain.Users;
 
 namespace ZonarHub.Application.Features.AdminPermissions.GetUserPermissions;
@@ -13,19 +14,22 @@ public sealed class GetAdminUserPermissionsHandler : IRequestHandler<GetAdminUse
     private readonly IUserOrganizationAssignmentRepository _assignments;
     private readonly IUserOrganizationPermissionRepository _permissions;
     private readonly IUserPermissionService _permissionService;
+    private readonly IOrganizationRepository _organizations;
 
     public GetAdminUserPermissionsHandler(
         ICurrentUser currentUser,
         IUserRepository users,
         IUserOrganizationAssignmentRepository assignments,
         IUserOrganizationPermissionRepository permissions,
-        IUserPermissionService permissionService)
+        IUserPermissionService permissionService,
+        IOrganizationRepository organizations)
     {
         _currentUser = currentUser;
         _users = users;
         _assignments = assignments;
         _permissions = permissions;
         _permissionService = permissionService;
+        _organizations = organizations;
     }
 
     public async Task<Result<AdminUserPermissionsResponse>> Handle(
@@ -60,6 +64,11 @@ public sealed class GetAdminUserPermissionsHandler : IRequestHandler<GetAdminUse
             organizationIds.Insert(0, primaryOrganizationId);
         }
 
+        if (!AdminUserAuthorization.IsSystemAdmin(caller))
+        {
+            organizationIds = await FilterToCallerTenantAsync(organizationIds, caller.TenantId, cancellationToken);
+        }
+
         var persisted = await _permissions.GetByUserIdAsync(target.Id.Value, cancellationToken);
         var groupedPersisted = persisted
             .GroupBy(permission => permission.OrganizationId)
@@ -83,5 +92,28 @@ public sealed class GetAdminUserPermissionsHandler : IRequestHandler<GetAdminUse
                 .ToList());
 
         return Result.Success(response);
+    }
+
+    /// <summary>
+    /// Keeps only organizations that belong to the tenant administrator's own tenant.
+    /// Organizations that cannot be resolved are excluded (fail-closed) so anomalous
+    /// foreign-tenant assignments never leak to tenant-scoped callers.
+    /// </summary>
+    private async Task<List<Guid>> FilterToCallerTenantAsync(
+        IReadOnlyList<Guid> organizationIds,
+        Guid? callerTenantId,
+        CancellationToken cancellationToken)
+    {
+        var visible = new List<Guid>(organizationIds.Count);
+        foreach (var organizationId in organizationIds)
+        {
+            var organization = await _organizations.GetByIdAsync(new OrganizationId(organizationId), cancellationToken);
+            if (organization is not null && organization.TenantId == callerTenantId)
+            {
+                visible.Add(organizationId);
+            }
+        }
+
+        return visible;
     }
 }
