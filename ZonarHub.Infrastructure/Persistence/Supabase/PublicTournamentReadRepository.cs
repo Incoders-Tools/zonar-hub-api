@@ -8,14 +8,15 @@ namespace ZonarHub.Infrastructure.Persistence.Supabase;
 /// <summary>
 /// PostgREST read side of the public tournament showcase. The showcase filter, ordering and limit run in the
 /// database; sport, complex and organization are embedded through their foreign keys. Only public-safe columns are
-/// selected, so admin-only data (observations, courts, points, sum value, owner ids) never leaves the store.
+/// selected, so admin-only data (observations, courts, points, sum value, owner ids) never leaves the store. The
+/// tournament id is read only for internal lookups (its published draw).
 /// </summary>
 internal sealed class PublicTournamentReadRepository : IPublicTournamentReadRepository
 {
     private const string RestPath = "/rest/v1/tournaments";
 
     private const string Select =
-        "select=public_slug,name,description,rules,start_date,end_date,registration_start_date,registration_end_date," +
+        "select=id,public_slug,name,description,rules,start_date,end_date,registration_start_date,registration_end_date," +
         "status,category_id,gender_id,modality_id,max_pairs,image_url,cover_image_url,registration_fee_per_pair,prize_money," +
         "sport:sports(key,name,icon,icon_source)," +
         "complex:complexes(name,address)," +
@@ -63,6 +64,7 @@ internal sealed class PublicTournamentReadRepository : IPublicTournamentReadRepo
     }
 
     private static PublicTournamentRecord ToRecord(PublicTournamentRow row) => new(
+        row.Id,
         row.PublicSlug,
         row.Name,
         row.Description,
@@ -101,6 +103,7 @@ internal sealed class PublicTournamentReadRepository : IPublicTournamentReadRepo
             o.ContactEmail));
 
     private sealed record PublicTournamentRow(
+        [property: JsonPropertyName("id")] Guid Id,
         [property: JsonPropertyName("public_slug")] string PublicSlug,
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("description")] string? Description,

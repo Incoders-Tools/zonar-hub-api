@@ -117,6 +117,7 @@ app.MapTournamentStatusesEndpoints();
 app.MapTournamentRulesEndpoints();
 app.MapTournamentModalitiesEndpoints();
 app.MapAdminTournamentsEndpoints();
+app.MapAdminTournamentDrawEndpoints();
 app.MapPublicTournamentsEndpoints();
 app.MapAdminRolesEndpoints();
 app.MapAdminDashboardEndpoints();

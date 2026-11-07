@@ -6,7 +6,8 @@ namespace ZonarHub.Tests.Infrastructure.Persistence;
 
 /// <summary>
 /// The showcase filter runs in PostgREST: the repository must ask only for public, active, non-cancelled tournaments
-/// with a slug, ordered by start date, and must never select admin-only columns.
+/// with a slug, ordered by start date, and must never select admin-only columns. The tournament id is read for
+/// internal lookups only (the public draw); the application never exposes it.
 /// </summary>
 public class PublicTournamentReadRepositoryTests
 {
@@ -20,7 +21,7 @@ public class PublicTournamentReadRepositoryTests
 
     private static readonly string[] ForbiddenColumns =
     [
-        "*", "id", "organization_id", "tenant_id", "complex_id", "selected_court_ids", "observations", "sum_value",
+        "*", "organization_id", "tenant_id", "complex_id", "selected_court_ids", "observations", "sum_value",
         "points_to_award", "created_by_user_id", "legal_name", "tournament_type_id", "rule_set_id",
     ];
 
@@ -52,6 +53,7 @@ public class PublicTournamentReadRepositoryTests
 
         var item = Assert.Single(await repository.ListAsync(100));
 
+        Assert.Equal(Guid.Parse("00000000-0000-0000-0000-0000000000d1"), item.Id);
         Assert.Equal("open-norte-abc123", item.Slug);
         Assert.Equal("Open Norte", item.Name);
         Assert.Equal("Summer open", item.Description);
@@ -91,7 +93,7 @@ public class PublicTournamentReadRepositoryTests
     [Fact]
     public async Task List_RowWithoutEmbeds_MapsThemToNull()
     {
-        const string row = """{"public_slug":"open-abc123","name":"Open","start_date":"2026-11-20","end_date":"2026-11-21","sport":null,"complex":null,"organization":null}""";
+        const string row = """{"id":"00000000-0000-0000-0000-0000000000d2","public_slug":"open-abc123","name":"Open","start_date":"2026-11-20","end_date":"2026-11-21","sport":null,"complex":null,"organization":null}""";
         var repository = CreateRepository([], _ => Json($"[{row}]"));
 
         var item = Assert.Single(await repository.ListAsync(10));
@@ -120,6 +122,8 @@ public class PublicTournamentReadRepositoryTests
 
         Assert.Contains("limit=1", query);
         AssertSelectHasNoForbiddenColumns(query);
+        Assert.StartsWith("select=id,public_slug,", query.Split('&').Single(p => p.StartsWith("select=", StringComparison.Ordinal)));
+        Assert.Equal(Guid.Parse("00000000-0000-0000-0000-0000000000d1"), item.Id);
     }
 
     [Fact]
@@ -161,6 +165,7 @@ public class PublicTournamentReadRepositoryTests
 
     private static string RowJson() => """
         {
+          "id": "00000000-0000-0000-0000-0000000000d1",
           "public_slug": "open-norte-abc123",
           "name": "Open Norte",
           "description": "Summer open",

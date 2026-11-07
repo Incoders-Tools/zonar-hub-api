@@ -1,8 +1,10 @@
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Application.Features.PublicTournaments.GetAll;
 using ZonarHub.Application.Features.PublicTournaments.GetBySlug;
+using ZonarHub.Application.Features.PublicTournaments.GetDraw;
 using ZonarHub.Domain.Organizations;
 using ZonarHub.Infrastructure.Persistence.InMemory;
+using ZonarHub.Tests.Application.TournamentDraws;
 
 namespace ZonarHub.Tests.Application.PublicTournaments;
 
@@ -27,6 +29,7 @@ internal sealed class PublicTournamentsTestHarness
 
         List = new GetPublicTournamentsHandler(Tournaments, Categories, Genders, Modalities, Statuses);
         BySlug = new GetPublicTournamentBySlugHandler(Tournaments, Categories, Genders, Modalities, Statuses);
+        Draw = new GetPublicTournamentDrawHandler(Tournaments, Draws);
     }
 
     private static readonly DateTime Stamp = new(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -36,9 +39,11 @@ internal sealed class PublicTournamentsTestHarness
     public FakeGenderRepository Genders { get; } = new();
     public FakeModalityRepository Modalities { get; } = new();
     public InMemoryTournamentStatusRepository Statuses { get; } = new();
+    public InMemoryTournamentDrawRepository Draws { get; } = new(Stamp);
 
     public GetPublicTournamentsHandler List { get; }
     public GetPublicTournamentBySlugHandler BySlug { get; }
+    public GetPublicTournamentDrawHandler Draw { get; }
 
     public static OrganizationPublicProfile Consent(bool enabled = true) => OrganizationPublicProfile.Create(
         enabled,
@@ -57,7 +62,9 @@ internal sealed class PublicTournamentsTestHarness
         string slug = "open-norte-abc123",
         DateOnly? start = null,
         string? status = "registration_open",
-        PublicOrganizationRecord? organization = null) => new(
+        PublicOrganizationRecord? organization = null,
+        Guid? id = null) => new(
+        id ?? Guid.NewGuid(),
         slug,
         "Open Norte",
         "Summer open",

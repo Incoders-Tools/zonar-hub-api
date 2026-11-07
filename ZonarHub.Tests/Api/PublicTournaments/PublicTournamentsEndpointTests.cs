@@ -10,6 +10,7 @@ using ZonarHub.ApiService.Endpoints.Public;
 using ZonarHub.Application.Features.PublicTournaments;
 using ZonarHub.Application.Features.PublicTournaments.GetAll;
 using ZonarHub.Application.Features.PublicTournaments.GetBySlug;
+using ZonarHub.Application.Features.PublicTournaments.GetDraw;
 using ZonarHub.Tests.Application.PublicTournaments;
 using static ZonarHub.Tests.Application.PublicTournaments.PublicTournamentsTestHarness;
 
@@ -73,7 +74,7 @@ public class PublicTournamentsEndpointTests
         var endpoints = MappedEndpoints(app => app.MapPublicTournamentsEndpoints());
 
         Assert.Equal(
-            ["/api/public/tournaments/", "/api/public/tournaments/{slug}"],
+            ["/api/public/tournaments/", "/api/public/tournaments/{slug}", "/api/public/tournaments/{slug}/draw"],
             endpoints.Select(e => e.RoutePattern.RawText).Order());
         foreach (var endpoint in endpoints)
         {
@@ -118,6 +119,7 @@ public class PublicTournamentsEndpointTests
             {
                 GetPublicTournamentsQuery list => await h.List.Handle(list, cancellationToken),
                 GetPublicTournamentBySlugQuery bySlug => await h.BySlug.Handle(bySlug, cancellationToken),
+                GetPublicTournamentDrawQuery draw => await h.Draw.Handle(draw, cancellationToken),
                 _ => throw new NotSupportedException(),
             };
             return (TResponse)result;
