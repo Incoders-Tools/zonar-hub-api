@@ -109,6 +109,65 @@ public class AdminTournamentDrawCourtTests
     }
 
     [Fact]
+    public async Task RecordResult_EditKeepingTheStoredCourtThatIsNoLongerEligible_KeepsItsIdAndStoredName()
+    {
+        var h = new TournamentDrawsTestHarness();
+        var tournament = await h.OwnTournamentAsync();
+        var complex = await h.SeedComplexAsync(tournament.OrganizationId);
+        await h.SeedCourtAsync(complex, "Central");
+        var retired = await h.SeedCourtAsync(complex, "Old court", isActive: false);
+        await h.AtComplexAsync(tournament, complex);
+        h.Draws.SeedDraft(tournament, Knockout(4));
+        h.Draws.SeedResult(tournament.Id, HomeWin("KO-R1-M1") with { CourtName = "Pista 1" }, retired.Id.Value);
+        h.Draws.SeedResult(tournament.Id, HomeWin("KO-R1-M2") with { CourtName = "Prestada" });
+        var edit = new MatchResultBody(
+            "completed",
+            [new SetScoreBody(6, 3, null), new SetScoreBody(6, 2, null)],
+            "home",
+            retired.Id.Value,
+            "Typed name",
+            null,
+            null,
+            null);
+
+        var draw = Draw(await AdminTournamentDrawEndpointsExtensions.RecordResultAsync(
+            tournament.Id, "KO-R1-M1", edit, h.Sender, CancellationToken.None));
+
+        Assert.Equal(["result:KO-R1-M1"], h.Draws.Writes);
+        var stored = Assert.Single(h.Draws.UpsertedResults);
+        Assert.Equal((retired.Id.Value, "Pista 1"), (stored.CourtId!.Value, stored.Result.CourtName));
+        Assert.Equal([new SetScore(6, 3), new SetScore(6, 2)], stored.Result.Sets);
+        var edited = Match(draw, "KO-R1-M1").Result!;
+        Assert.Equal((retired.Id.Value, "Pista 1"), (edited.CourtId!.Value, edited.CourtName));
+        var untouched = Match(draw, "KO-R1-M2").Result!;
+        Assert.Equal((null, "Prestada"), (untouched.CourtId, untouched.CourtName));
+    }
+
+    [Fact]
+    public async Task RecordResult_SwitchingFromTheStoredCourtToAnotherIneligibleCourt_IsInvalidCourtWithoutWriting()
+    {
+        var h = new TournamentDrawsTestHarness();
+        var tournament = await h.OwnTournamentAsync();
+        var complex = await h.SeedComplexAsync(tournament.OrganizationId);
+        var central = await h.SeedCourtAsync(complex, "Central");
+        var retired = await h.SeedCourtAsync(complex, "Old court", isActive: false);
+        await h.AtComplexAsync(tournament, complex);
+        h.Draws.SeedDraft(tournament, Knockout(4));
+        h.Draws.SeedResult(tournament.Id, HomeWin("KO-R1-M1") with { CourtName = "Central" }, central.Id.Value);
+
+        var result = await AdminTournamentDrawEndpointsExtensions.RecordResultAsync(
+            tournament.Id, "KO-R1-M1", Completed() with { CourtId = retired.Id.Value }, h.Sender, CancellationToken.None);
+
+        var problem = Assert.IsType<ProblemHttpResult>(result);
+        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+        Assert.Equal("draws.results.invalid_court", problem.ProblemDetails.Extensions["code"]);
+        Assert.Empty(h.Draws.Writes);
+        Assert.Empty(h.Draws.UpsertedResults);
+        var stored = Assert.Single((await h.Draws.GetByTournamentIdAsync(tournament.Id))!.Results);
+        Assert.Equal((central.Id.Value, "Central"), (stored.CourtId!.Value, stored.Result.CourtName));
+    }
+
+    [Fact]
     public async Task RecordResult_FreeTextCourtNameWithoutCourtId_IsStoredAsTyped()
     {
         var h = new TournamentDrawsTestHarness();
