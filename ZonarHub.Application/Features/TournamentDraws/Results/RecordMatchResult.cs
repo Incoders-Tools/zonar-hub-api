@@ -21,8 +21,9 @@ public sealed record RecordMatchResultCommand(Guid TournamentId, string MatchId,
 /// lock this match), nothing is written and the request fails with <see cref="TournamentDrawErrors.ConcurrentModification"/>.
 /// A <see cref="MatchResultBody.CourtId"/> must be one of the tournament's <see cref="TournamentDrawCourts"/>, otherwise
 /// nothing is written and the request fails with <see cref="TournamentDrawErrors.InvalidCourt"/>; the court's current
-/// name replaces any <see cref="MatchResultBody.CourtName"/> sent with it (D13). Without a court id the free-text name
-/// is stored as sent.
+/// name replaces any <see cref="MatchResultBody.CourtName"/> sent with it (D13). A court id equal to the one already
+/// stored for the match is kept with its stored name without re-validation, so a court later deactivated or removed from
+/// the tournament does not block editing the result. Without a court id the free-text name is stored as sent.
 /// </remarks>
 public sealed class RecordMatchResultHandler
     : IRequestHandler<RecordMatchResultCommand, Result<TournamentDrawResponse>>
@@ -62,9 +63,15 @@ public sealed class RecordMatchResultHandler
             return Result.Failure<TournamentDrawResponse>(mapped.Error);
 
         var result = mapped.Value;
-        if (request.Body.CourtId is { } courtId)
+        var stored = snapshot.Results.FirstOrDefault(
+            existing => string.Equals(existing.Result.MatchId, request.MatchId, StringComparison.Ordinal));
+        if (request.Body.CourtId is { } courtId && stored?.CourtId == courtId)
         {
-            var court = await _courts.FindAsync(tournament.Value, courtId, cancellationToken);
+            result = result with { CourtName = stored.Result.CourtName };
+        }
+        else if (request.Body.CourtId is { } otherCourtId)
+        {
+            var court = await _courts.FindAsync(tournament.Value, otherCourtId, cancellationToken);
             if (court is null)
                 return Result.Failure<TournamentDrawResponse>(TournamentDrawErrors.InvalidCourt);
 
