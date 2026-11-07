@@ -1,4 +1,5 @@
--- Regression checks for the draw revision functions (D12, migration 20261101100000_tournament_draw_revisions).
+-- Regression checks for the draw revision functions (D12, migration 20261101100000_tournament_draw_revisions) and
+-- their orphan-aware results checks (migration 20261107100000_tournament_draw_orphan_results).
 -- Synthetic UUIDs and keys only; everything runs in one transaction that is rolled back.
 
 DO $$
@@ -73,7 +74,24 @@ INSERT INTO public.sports (id, name, key, icon, icon_source)
 VALUES ('a6000000-0000-0000-0000-000000000004', 'Draw sport', 'a6-draw-sport', 'x', 'unicode');
 INSERT INTO public.tournaments (id, organization_id, sport_id, name, start_date, end_date, status)
 VALUES ('a6000000-0000-0000-0000-000000000005', 'a6000000-0000-0000-0000-000000000002',
-        'a6000000-0000-0000-0000-000000000004', 'Draw open', '2026-11-01', '2026-11-02', 'upcoming');
+        'a6000000-0000-0000-0000-000000000004', 'Draw open', '2026-11-01', '2026-11-02', 'upcoming'),
+       ('a6000000-0000-0000-0000-000000000006', 'a6000000-0000-0000-0000-000000000002',
+        'a6000000-0000-0000-0000-000000000004', 'Draw orphans', '2026-11-01', '2026-11-02', 'upcoming'),
+       ('a6000000-0000-0000-0000-000000000007', 'a6000000-0000-0000-0000-000000000002',
+        'a6000000-0000-0000-0000-000000000004', 'Draw race', '2026-11-01', '2026-11-02', 'upcoming');
+
+-- Simulates a draw of the race tournament committed by another writer between the function's lookup and its insert:
+-- the row lands right before the function's own insert, which then meets it on the unique index. Rolled back below.
+CREATE FUNCTION public.a6_concurrent_draw() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF pg_trigger_depth() = 1 AND NEW.tournament_id = 'a6000000-0000-0000-0000-000000000007' THEN
+  INSERT INTO public.tournament_draws
+  SELECT (jsonb_populate_record(NEW, jsonb_build_object('id', gen_random_uuid(), 'seed', '1'))).*;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER a6_concurrent_draw BEFORE INSERT ON public.tournament_draws
+ FOR EACH ROW EXECUTE FUNCTION public.a6_concurrent_draw();
 
 SET LOCAL ROLE service_role;
 
@@ -82,6 +100,7 @@ DECLARE
  t uuid := 'a6000000-0000-0000-0000-000000000005';
  o uuid := 'a6000000-0000-0000-0000-000000000002';
  doc jsonb := '{"version":1}';
+ structure jsonb := '{"version":1,"phases":[{"id":"KO","groups":[],"rounds":[{"matches":[{"id":"KO-R1-M1"},{"id":"KO-R1-M2"}]}]}]}';
  saved jsonb;
  written jsonb;
  draw uuid;
@@ -89,11 +108,13 @@ DECLARE
  stored record;
 
  FUNCTION_SAVE constant text := 'SELECT public.save_tournament_draw_draft(%L, %L, %L, %L, ''singleElimination'', '
-  || '''pair'', ''seeded'', %L, ''{"version":1}'', ''{"version":1}'', ''{"version":1}'', ''2026-11-01T12:00:00Z'')';
+  || '''pair'', ''seeded'', %L, ''{"version":1}'', ''{"version":1}'', '
+  || '''{"version":1,"phases":[{"id":"KO","groups":[],"rounds":[{"matches":[{"id":"KO-R1-M1"},{"id":"KO-R1-M2"}]}]}]}'', '
+  || '''2026-11-01T12:00:00Z'')';
 BEGIN
  -- Insert: no draw expected, revision 0.
  saved := public.save_tournament_draw_draft(t, o, NULL, NULL, 'singleElimination', 'pair', 'seeded', '7',
-  doc, doc, doc, '2026-11-01T12:00:00Z');
+  doc, doc, structure, '2026-11-01T12:00:00Z');
  draw := (saved->>'id')::uuid;
  IF (saved->>'revision')::int <> 0 OR saved->>'status' <> 'draft' OR saved->>'seed' <> '7'
     OR saved->>'tournament_id' <> t::text THEN
@@ -112,7 +133,7 @@ BEGIN
 
  -- Replace at the current revision: same id, next revision.
  saved := public.save_tournament_draw_draft(t, o, draw, 0, 'singleElimination', 'pair', 'seeded', '8',
-  doc, doc, doc, '2026-11-01T12:01:00Z');
+  doc, doc, structure, '2026-11-01T12:01:00Z');
  IF (saved->>'id')::uuid <> draw OR (saved->>'revision')::int <> 1 OR saved->>'seed' <> '8' THEN
   RAISE EXCEPTION 'replace returned %', saved;
  END IF;
@@ -215,6 +236,83 @@ BEGIN
  END;
 
  RAISE NOTICE 'draw save/status/delete/result revision checks, results_exist, not_draft, stale and deleted draws: passed';
+END $$;
+
+DO $$
+DECLARE
+ t uuid := 'a6000000-0000-0000-0000-000000000006';
+ race uuid := 'a6000000-0000-0000-0000-000000000007';
+ o uuid := 'a6000000-0000-0000-0000-000000000002';
+ doc jsonb := '{"version":1}';
+ -- A group phase and a knockout phase: matches live under phases[*].groups[*].rounds[*] and phases[*].rounds[*].
+ structure jsonb := '{"version":1,"phases":['
+  || '{"id":"G","groups":[{"id":"G1","rounds":[{"matches":[{"id":"G1-R1-M1","winnerAdvancesTo":"KO-R1-M1"}]}]}],"rounds":[]},'
+  || '{"id":"KO","groups":[],"rounds":[{"matches":[{"id":"KO-R1-M1"}]}]}]}';
+ decided constant jsonb := '[{"home":6,"away":4,"tiebreak":null},{"home":6,"away":4,"tiebreak":null}]';
+ saved jsonb;
+ written jsonb;
+ draw uuid;
+ refused text;
+
+ FUNCTION_SAVE constant text := 'SELECT public.save_tournament_draw_draft(%L, %L, %L, %L, ''groupsThenKnockout'', '
+  || '''pair'', ''seeded'', ''9'', ''{"version":1}'', ''{"version":1}'', %L, ''2026-11-01T13:00:00Z'')';
+BEGIN
+ saved := public.save_tournament_draw_draft(t, o, NULL, NULL, 'groupsThenKnockout', 'pair', 'seeded', '7',
+  doc, doc, structure, '2026-11-01T13:00:00Z');
+ draw := (saved->>'id')::uuid;
+
+ -- A decided result of a match the structure no longer has (orphan) does not block replacing the draft.
+ written := public.upsert_tournament_draw_match_result(draw, 0, 'OLD-R1-M1', 'completed', decided, 'home', NULL, NULL,
+  NULL, NULL, NULL, '2026-11-01T13:01:00Z');
+ IF (written->>'revision')::int <> 1 THEN RAISE EXCEPTION 'orphan upsert returned %', written; END IF;
+ refused := pg_temp.refusal(format(FUNCTION_SAVE, t, o, draw, 1, structure));
+ IF refused <> 'accepted' THEN RAISE EXCEPTION 'save with an orphan result: %', refused; END IF;
+ IF (SELECT revision FROM public.tournament_draws WHERE id = draw) <> 2
+    OR NOT EXISTS (SELECT 1 FROM public.tournament_draw_match_results WHERE draw_id = draw AND match_id = 'OLD-R1-M1') THEN
+  RAISE EXCEPTION 'save with an orphan result did not replace the draft and keep its results';
+ END IF;
+
+ -- A started match of the structure still blocks, in a group round and in a knockout round.
+ written := public.upsert_tournament_draw_match_result(draw, 2, 'G1-R1-M1', 'inProgress', '[]', NULL, NULL, NULL,
+  NULL, NULL, NULL, '2026-11-01T13:02:00Z');
+ IF (written->>'revision')::int <> 3 THEN RAISE EXCEPTION 'group upsert returned %', written; END IF;
+ refused := pg_temp.refusal(format(FUNCTION_SAVE, t, o, draw, 3, structure));
+ IF refused <> 'draws.results_exist' THEN RAISE EXCEPTION 'save with a group result: %', refused; END IF;
+ refused := pg_temp.refusal(format('SELECT public.delete_tournament_draw_draft(%L, 3)', draw));
+ IF refused <> 'draws.results_exist' THEN RAISE EXCEPTION 'delete with a group result: %', refused; END IF;
+ PERFORM public.upsert_tournament_draw_match_result(draw, 3, 'G1-R1-M1', 'scheduled', '[]', NULL, NULL, NULL,
+  NULL, NULL, NULL, '2026-11-01T13:03:00Z');
+ PERFORM public.upsert_tournament_draw_match_result(draw, 4, 'KO-R1-M1', 'completed', decided, 'home', NULL, NULL,
+  NULL, NULL, NULL, '2026-11-01T13:04:00Z');
+ refused := pg_temp.refusal(format(FUNCTION_SAVE, t, o, draw, 5, structure));
+ IF refused <> 'draws.results_exist' THEN RAISE EXCEPTION 'save with a knockout result: %', refused; END IF;
+ refused := pg_temp.refusal(format('SELECT public.delete_tournament_draw_draft(%L, 5)', draw));
+ IF refused <> 'draws.results_exist' THEN RAISE EXCEPTION 'delete with a knockout result: %', refused; END IF;
+ IF (SELECT revision FROM public.tournament_draws WHERE id = draw) <> 5 THEN
+  RAISE EXCEPTION 'blocked writes changed the draw';
+ END IF;
+
+ -- Once only the orphan is decided, the draft can be deleted and takes the orphan with it.
+ PERFORM public.upsert_tournament_draw_match_result(draw, 5, 'KO-R1-M1', 'scheduled', '[]', NULL, NULL, NULL,
+  NULL, NULL, NULL, '2026-11-01T13:05:00Z');
+ written := public.delete_tournament_draw_draft(draw, 6);
+ IF (written->>'id')::uuid <> draw OR (written->>'revision')::int <> 7 THEN
+  RAISE EXCEPTION 'delete with an orphan result returned %', written;
+ END IF;
+ IF EXISTS (SELECT 1 FROM public.tournament_draws WHERE id = draw)
+    OR EXISTS (SELECT 1 FROM public.tournament_draw_match_results WHERE draw_id = draw) THEN
+  RAISE EXCEPTION 'delete with an orphan result left rows';
+ END IF;
+
+ -- Insert race: no draw when the function looked, one committed before its insert. The insert meets the unique index,
+ -- inserts nothing and is a concurrent change; the statement leaves no draw behind.
+ refused := pg_temp.refusal(format(FUNCTION_SAVE, race, o, NULL, NULL, structure));
+ IF refused <> 'draws.concurrent_modification' THEN RAISE EXCEPTION 'insert race: %', refused; END IF;
+ IF EXISTS (SELECT 1 FROM public.tournament_draws WHERE tournament_id = race) THEN
+  RAISE EXCEPTION 'insert race left a draw';
+ END IF;
+
+ RAISE NOTICE 'orphan results ignored by save/delete, group and knockout results block, insert race refused: passed';
 END $$;
 
 RESET ROLE;
