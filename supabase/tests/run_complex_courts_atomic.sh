@@ -15,13 +15,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for attempt in {1..60}; do
-  if docker exec "$container" pg_isready -U postgres >/dev/null 2>&1; then
+# The image first runs a temporary init server that pg_isready also accepts, then
+# restarts. Wait for the init-complete log line, then for the final server.
+init_complete=false
+for attempt in {1..120}; do
+  if docker logs "$container" 2>&1 | grep -Fq 'PostgreSQL init process complete; ready for start up.'; then
+    init_complete=true
     break
   fi
   sleep 1
 done
-docker exec "$container" pg_isready -U postgres >/dev/null
+if [[ "$init_complete" != true ]]; then
+  echo 'PostgreSQL init process did not complete within 120 seconds' >&2
+  docker logs --tail 20 "$container" >&2 || true
+  exit 1
+fi
+ready=false
+for attempt in {1..60}; do
+  if docker exec "$container" pg_isready -U postgres >/dev/null 2>&1 &&
+     docker exec "$container" psql -XAt -v ON_ERROR_STOP=1 -U postgres -c 'select 1' >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$ready" != true ]]; then
+  echo 'PostgreSQL did not accept connections within 60 seconds after init completed' >&2
+  docker logs --tail 20 "$container" >&2 || true
+  exit 1
+fi
 
 # Migrations expect the Supabase login roles, but no synthetic application tables.
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres <<'SQL'
