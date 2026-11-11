@@ -17,6 +17,7 @@ namespace ZonarHub.Infrastructure.Persistence.Supabase;
 internal sealed class EligibilityProfileRepository(IHttpClientFactory factory) : IEligibilityProfileRepository
 {
     private const string RestPath = "/rest/v1/tournament_eligibility_profiles";
+    private const string TournamentsPath = "/rest/v1/tournaments";
     private const string SaveRpc = "/rest/v1/rpc/save_tournament_eligibility_profile";
     private const string WithSlots = "select=*,slots:tournament_eligibility_profile_slots(*)";
     private const string SlotsOrder = "slots.order=slot_number.asc";
@@ -38,6 +39,15 @@ internal sealed class EligibilityProfileRepository(IHttpClientFactory factory) :
     {
         var rows = await GetRowsAsync($"{WithSlots}&organization_id=eq.{organizationId}&id=eq.{id}&{SlotsOrder}&limit=1", cancellationToken);
         return rows.Count == 0 ? null : ToDomain(rows[0]);
+    }
+
+    public async Task<EligibilityProfileId?> GetTournamentProfileIdAsync(Guid tournamentId, CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.GetAsync(
+            $"{TournamentsPath}?select=eligibility_profile_id&id=eq.{tournamentId}&limit=1", cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var rows = await response.Content.ReadFromJsonAsync<List<TournamentProfileRow>>(cancellationToken) ?? [];
+        return rows.FirstOrDefault()?.EligibilityProfileId is { } id ? new EligibilityProfileId(id) : null;
     }
 
     public async Task<EligibilityProfile> SaveAsync(EligibilityProfile profile, CancellationToken cancellationToken = default)
@@ -98,6 +108,9 @@ internal sealed class EligibilityProfileRepository(IHttpClientFactory factory) :
         (row.Slots ?? []).Select(s => new EligibilitySlot(s.SlotNumber, s.GenderId, s.CategoryId, s.MinAge, s.MaxAge, s.Label, s.Required)).ToList(),
         row.CreatedAtUtc.UtcDateTime,
         row.UpdatedAtUtc.UtcDateTime);
+
+    private sealed record TournamentProfileRow(
+        [property: JsonPropertyName("eligibility_profile_id")] Guid? EligibilityProfileId);
 
     private sealed record SaveParameters(
         [property: JsonPropertyName("p_profile_id")] Guid ProfileId,

@@ -12,3 +12,32 @@ public sealed class PersistenceConflictException(Error error)
 {
     public Error Error { get; } = error;
 }
+
+/// <summary>Runs one repository write and returns a refused write as its <see cref="PersistenceConflictException.Error"/>.</summary>
+public static class PersistenceWrites
+{
+    public static async Task<Result<T>> TryAsync<T>(Func<Task<T>> write)
+    {
+        try
+        {
+            return Result.Success(await write());
+        }
+        catch (PersistenceConflictException refused)
+        {
+            return Result.Failure<T>(refused.Error);
+        }
+    }
+
+    public static async Task<Result> TryAsync(Func<Task> write)
+    {
+        try
+        {
+            await write();
+            return Result.Success();
+        }
+        catch (PersistenceConflictException refused)
+        {
+            return Result.Failure(refused.Error);
+        }
+    }
+}

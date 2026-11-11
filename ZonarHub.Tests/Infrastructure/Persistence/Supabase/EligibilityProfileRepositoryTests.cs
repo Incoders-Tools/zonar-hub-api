@@ -146,6 +146,24 @@ public class EligibilityProfileRepositoryTests
         await Assert.ThrowsAsync<HttpRequestException>(() => new EligibilityProfileRepository(other.Factory).DeleteAsync(Organization, Id));
     }
 
+    [Fact]
+    public async Task GetTournamentProfileId_ReadsTheTournamentsColumn()
+    {
+        var tournament = Guid.Parse("00000000-0000-0000-0000-0000000000f1");
+        var assigned = new SupabaseHttpRecorder(_ => Json($$"""[{"eligibility_profile_id":"{{Id}}"}]"""));
+        var unassigned = new SupabaseHttpRecorder(_ => Json("""[{"eligibility_profile_id":null}]"""));
+        var missing = new SupabaseHttpRecorder(_ => Json("[]"));
+
+        var id = await new EligibilityProfileRepository(assigned.Factory).GetTournamentProfileIdAsync(tournament);
+
+        var request = assigned.Single();
+        Assert.Equal(("GET", "/rest/v1/tournaments"), (request.Method, request.Path));
+        Assert.Equal(["select=eligibility_profile_id", $"id=eq.{tournament}", "limit=1"], request.Query);
+        Assert.Equal(Id, id);
+        Assert.Null(await new EligibilityProfileRepository(unassigned.Factory).GetTournamentProfileIdAsync(tournament));
+        Assert.Null(await new EligibilityProfileRepository(missing.Factory).GetTournamentProfileIdAsync(tournament));
+    }
+
     private static string RowJson(bool slots = true)
     {
         var row = $$"""

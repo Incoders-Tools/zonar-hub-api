@@ -20,6 +20,12 @@ public interface IEligibilityProfileRepository
         EligibilityProfileId id,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The <c>eligibility_profile_id</c> of the tournament, or null when it has none or does not exist. Callers load the
+    /// profile with <see cref="GetByIdAsync"/> under the tournament's organization.
+    /// </summary>
+    Task<EligibilityProfileId?> GetTournamentProfileIdAsync(Guid tournamentId, CancellationToken cancellationToken = default);
+
     /// <summary>Inserts the profile, or replaces its columns and every slot; returns it as stored.</summary>
     /// <exception cref="PersistenceConflictException">
     /// <see cref="EligibilityProfileErrors.NameTaken"/> when another profile of the organization has the name (any case),
