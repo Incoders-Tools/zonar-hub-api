@@ -1,5 +1,4 @@
 using ZonarHub.Application.Abstractions;
-using ZonarHub.Application.Features.Auth;
 using ZonarHub.Application.Features.Auth.SendVerificationCode;
 using ZonarHub.Domain.Common;
 using MediatR;
@@ -10,17 +9,19 @@ public sealed class CheckVerificationCodeHandler
     : IRequestHandler<CheckVerificationCodeQuery, Result<bool>>
 {
     private readonly ICacheStore _cache;
+    private readonly IDevelopmentMasterCode _masterCode;
 
-    public CheckVerificationCodeHandler(ICacheStore cache)
+    public CheckVerificationCodeHandler(ICacheStore cache, IDevelopmentMasterCode masterCode)
     {
         _cache = cache;
+        _masterCode = masterCode;
     }
 
     public async Task<Result<bool>> Handle(
         CheckVerificationCodeQuery request,
         CancellationToken cancellationToken)
     {
-        if (AuthVerificationCodes.IsMasterBypass(request.Code))
+        if (_masterCode.Matches(request.Code))
             return Result.Success(true);
 
         var emailLower = request.Email.Trim().ToLowerInvariant();
