@@ -259,10 +259,16 @@ internal sealed class InMemoryPlayerRepository : IPlayerRepository
     }
 
     public Task<Player?> FindByEmailAsync(OrganizationId organizationId, string email, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
+        Task.FromResult(Player.NormalizeEmail(email) is { } normalized
+            && _players.Values.SingleOrDefault(p => p.OrganizationId == organizationId && p.Email == normalized) is { } player
+                ? Copy(player)
+                : null);
 
     public Task<Player?> FindByDocumentAsync(OrganizationId organizationId, string documentId, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
+        Task.FromResult(!string.IsNullOrWhiteSpace(documentId)
+            && _players.Values.SingleOrDefault(p => p.OrganizationId == organizationId && p.DocumentId == documentId.Trim()) is { } player
+                ? Copy(player)
+                : null);
 
     public Task AddAsync(Player player, CancellationToken cancellationToken = default)
     {

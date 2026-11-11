@@ -124,6 +124,7 @@ app.MapAdminTournamentRegistrationsEndpoints();
 app.MapAdminPlayersEndpoints();
 app.MapAdminEligibilityProfilesEndpoints();
 app.MapPublicTournamentsEndpoints();
+app.MapPublicRegistrationsEndpoints();
 app.MapAdminRolesEndpoints();
 app.MapAdminDashboardEndpoints();
 app.MapCatalogGendersEndpoints();
