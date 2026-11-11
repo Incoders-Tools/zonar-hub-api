@@ -19,7 +19,7 @@ public sealed record CreateTournamentRegistrationCommand(Guid TournamentId, Crea
 /// Order, nothing written before the store call: tenant rule; requested status (<see cref="RegistrationErrors.InvalidStatus"/>
 /// unless pending or confirmed); the <see cref="RegistrationRequest"/> rules; every player an active player of the
 /// organization (<see cref="RegistrationErrors.PlayerNotFound"/>); D3 eligibility (<see cref="RegistrationEligibility"/>)
-/// against the tournament's profile, else its modality, gender and category. The store then decides the status
+/// against the slots of <see cref="TournamentEligibilitySlots"/> (the active profile, else the tournament's own rules). The store then decides the status
 /// (pending may become waitlisted) and refuses <see cref="RegistrationErrors.PlayerAlreadyRegistered"/> and
 /// <see cref="RegistrationErrors.CapacityReached"/>. The payment status starts pending when the tournament has a fee.
 /// </remarks>
@@ -29,8 +29,7 @@ public sealed class CreateTournamentRegistrationHandler
     private readonly TournamentDrawScope _scope;
     private readonly ITournamentRegistrationRepository _registrations;
     private readonly IPlayerRepository _players;
-    private readonly IEligibilityProfileRepository _profiles;
-    private readonly ITournamentModalityRepository _modalities;
+    private readonly TournamentEligibilitySlots _slots;
     private readonly CatalogReferences _catalogs;
     private readonly IClock _clock;
 
@@ -50,8 +49,7 @@ public sealed class CreateTournamentRegistrationHandler
         _scope = new TournamentDrawScope(currentUser, users, organizations, tournaments);
         _registrations = registrations;
         _players = players;
-        _profiles = profiles;
-        _modalities = modalities;
+        _slots = new TournamentEligibilitySlots(profiles, modalities);
         _catalogs = new CatalogReferences(genders, categories);
         _clock = clock;
     }
@@ -91,7 +89,7 @@ public sealed class CreateTournamentRegistrationHandler
         if (registration.Participants.Any(p => !players.ContainsKey(p.PlayerId)))
             return Failure(RegistrationErrors.PlayerNotFound);
 
-        var slots = await ResolveSlotsAsync(tournament, organization, cancellationToken);
+        var slots = await _slots.ResolveAsync(tournament, cancellationToken);
         if (slots.IsFailure)
             return Failure(slots.Error);
 
@@ -110,30 +108,6 @@ public sealed class CreateTournamentRegistrationHandler
 
         var created = await PersistenceWrites.TryAsync(() => _registrations.CreateAsync(registration, cancellationToken));
         return created.IsFailure ? Failure(created.Error) : Result.Success(TournamentRegistrationMapper.ToResponse(created.Value));
-    }
-
-    /// <summary>
-    /// The slots of the tournament's eligibility profile, else those of its modality, gender and category (D3). A
-    /// referenced profile the organization does not have is <see cref="EligibilityProfileErrors.NotFound"/>: the rules are
-    /// unknown, so nothing is admitted.
-    /// </summary>
-    private async Task<Result<IReadOnlyList<EligibilitySlot>>> ResolveSlotsAsync(
-        TournamentAdminDto tournament,
-        OrganizationId organization,
-        CancellationToken cancellationToken)
-    {
-        if (await _profiles.GetTournamentProfileIdAsync(tournament.Id, cancellationToken) is { } profileId)
-        {
-            var profile = await _profiles.GetByIdAsync(organization, profileId, cancellationToken);
-            return profile is null
-                ? Result.Failure<IReadOnlyList<EligibilitySlot>>(EligibilityProfileErrors.NotFound)
-                : Result.Success(profile.Slots);
-        }
-
-        var modality = tournament.ModalityId is { } modalityId
-            ? await _modalities.GetByIdAsync(modalityId, cancellationToken)
-            : null;
-        return Result.Success(RegistrationEligibility.TournamentSlots(modality?.Key, tournament.GenderId, tournament.CategoryId));
     }
 
     private static Result<TournamentRegistrationResponse> Failure(Error error) =>

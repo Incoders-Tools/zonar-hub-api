@@ -35,7 +35,7 @@ Persistence and the SQL functions are those of migration `20261110100000_tournam
 | `DELETE …/eligibility-profiles/{id}` | `204`, `404`, `409 eligibility_profiles.in_use` while a tournament references it |
 
 - Body: `{ name, description?, isActive, slots: [{ slotNumber, genderId?, categoryId?, minAge?, maxAge?, label?, required }] }`. `required` defaults to `true`. Slots are returned in slot order.
-- This API does not set `tournaments.eligibility_profile_id`. A tournament that references a profile uses the profile's slots for D3.
+- This API does not set `tournaments.eligibility_profile_id`. A tournament that references an active profile uses the profile's slots for D3. An inactive profile is ignored, and the tournament's own rules apply (L8).
 
 ## Registrations
 
@@ -57,7 +57,7 @@ Persistence and the SQL functions are those of migration `20261110100000_tournam
 
 ### D3 eligibility
 
-The rules come from the tournament's eligibility profile slots. Without a profile, they come from the modality:
+The rules come from the slots of the tournament's active eligibility profile. Without a profile, or when the profile is inactive, they come from the modality:
 
 | Modality | Slots |
 | --- | --- |

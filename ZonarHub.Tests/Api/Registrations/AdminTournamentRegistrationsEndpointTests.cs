@@ -241,6 +241,39 @@ public class AdminTournamentRegistrationsEndpointTests
         Created(await Endpoints.CreateAsync(tournament.Id, Pair(h, org), h.Sender, CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData("female", true, null)]
+    [InlineData("male", false, "registrations.gender_mismatch")]
+    public async Task Create_InactiveProfile_IsIgnoredAndTheTournamentsRulesApply(string players, bool eligible, string? code)
+    {
+        // L8: the inactive profile would demand a male first player and admit any second one; the tournament demands women.
+        var h = new RegistrationsTestHarness();
+        var org = await h.OwnOrganizationAsync();
+        var tournament = await h.TournamentAsync(org, genderId: Female);
+        var profile = EligibilityProfile.Reconstitute(
+            EligibilityProfileId.New(), new ZonarHub.Domain.Organizations.OrganizationId(org), "Inactive", null, false,
+            [new EligibilitySlot(1, Male, null, null, null, null, true), new EligibilitySlot(2, null, null, null, null, null, true)], Now, Now);
+        h.Profiles.Seed(profile);
+        h.Profiles.TournamentProfiles[tournament.Id] = profile.Id;
+        var gender = players == "female" ? Female : Male;
+        var ana = h.SeedPlayer(org, "Ana", "Gil", gender: gender);
+        var bea = h.SeedPlayer(org, "Bea", "Paz", gender: gender);
+
+        var result = await Endpoints.CreateAsync(
+            tournament.Id, new CreateRegistrationBody([new(1, ana.Id.Value), new(2, bea.Id.Value)]), h.Sender, CancellationToken.None);
+
+        if (eligible)
+        {
+            Assert.Equal("pending", Created(result).Status);
+            Assert.Equal(["create"], h.Registrations.Writes);
+            return;
+        }
+
+        AssertProblem(result, StatusCodes.Status400BadRequest, code!);
+        Assert.Empty(h.Registrations.Writes);
+        Assert.Empty(h.Registrations.RejectedWrites);
+    }
+
     [Fact]
     public async Task Create_ReferencedProfileTheOrganizationLacks_AdmitsNothing()
     {
