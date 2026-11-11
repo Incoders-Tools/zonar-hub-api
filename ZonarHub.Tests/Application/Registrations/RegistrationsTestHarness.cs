@@ -382,6 +382,9 @@ internal sealed class InMemoryTournamentRegistrationRepository(
 
     public Action? BeforeNextWrite { get; set; }
 
+    /// <summary>Awaited once by the next tournament listing, so a test can hold one request mid-flight.</summary>
+    public Func<Task>? BeforeNextList { get; set; }
+
     public TournamentRegistration? Find(Guid id) => _rows.SingleOrDefault(r => r.Id.Value == id);
 
     public TournamentRegistrationDetails Seed(TournamentAdminDto tournament, RegistrationStatus status, IReadOnlyList<Player> members)
@@ -401,12 +404,19 @@ internal sealed class InMemoryTournamentRegistrationRepository(
         Replace(r, status ?? r.Status, payment ?? r.PaymentStatus);
     }
 
-    public Task<IReadOnlyList<TournamentRegistrationDetails>> ListByTournamentAsync(Guid tournamentId, RegistrationStatus? status = null, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<TournamentRegistrationDetails>>(_rows
+    public async Task<IReadOnlyList<TournamentRegistrationDetails>> ListByTournamentAsync(Guid tournamentId, RegistrationStatus? status = null, CancellationToken cancellationToken = default)
+    {
+        var gate = BeforeNextList;
+        BeforeNextList = null;
+        if (gate is not null)
+            await gate();
+
+        return _rows
             .Where(r => r.TournamentId.Value == tournamentId && (status is null || r.Status == status))
             .OrderBy(r => r.CreatedAtUtc).ThenBy(r => r.Id.Value)
             .Select(Details)
-            .ToList());
+            .ToList();
+    }
 
     public Task<TournamentRegistrationDetails?> GetAsync(Guid tournamentId, TournamentRegistrationId id, CancellationToken cancellationToken = default) =>
         Task.FromResult(_rows.SingleOrDefault(r => r.Id == id && r.TournamentId.Value == tournamentId) is { } r ? Details(r) : null);

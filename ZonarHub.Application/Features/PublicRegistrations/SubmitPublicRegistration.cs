@@ -96,6 +96,8 @@ public sealed class SubmitPublicRegistrationHandler
         if (typed.IsFailure)
             return Failure(typed.Error);
 
+        // Held until the code is consumed or the submission is refused, so one code registers at most once.
+        using var codeLock = await PublicRegistrationCodes.LockAsync(tournament.Id, email.Value, cancellationToken);
         if (!await _codes.VerifyAsync(tournament.Id, email.Value, body.Code, cancellationToken))
             return Failure(PublicRegistrationErrors.InvalidCode);
 

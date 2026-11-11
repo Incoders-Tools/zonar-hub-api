@@ -292,6 +292,28 @@ public class PublicRegistrationsEndpointTests
     }
 
     [Fact]
+    public async Task Submit_TwoConcurrentSubmissionsWithOneCode_RegisterOnlyOnce()
+    {
+        var h = new PublicRegistrationsTestHarness();
+        await h.TournamentAsync();
+        var code = await h.CodeAsync();
+        var release = new TaskCompletionSource();
+        h.R.Registrations.BeforeNextList = () => release.Task;
+
+        var first = SubmitAsync(h, code);
+        var second = SubmitAsync(h, code, Participant(1, "Eva", "Sol", "eva@club.test"), Participant(2, "Flor", "Luz", "flor@club.test"));
+        await Task.Yield();
+        release.SetResult();
+        var results = await Task.WhenAll(first, second);
+
+        Assert.IsType<Created<PublicRegistrationSubmittedResponse>>(results[0]);
+        AssertProblem(results[1], StatusCodes.Status400BadRequest, "public_registrations.invalid_code");
+        Assert.Single(h.R.Registrations.CreatedRequests);
+        Assert.Equal(2, h.R.Players.Writes.Count);
+        Assert.Empty(h.Cache.Entries);
+    }
+
+    [Fact]
     public async Task Submit_CodeOfAnotherEmailOrTournament_OrTheSignUpCode_IsRefused()
     {
         var h = new PublicRegistrationsTestHarness();

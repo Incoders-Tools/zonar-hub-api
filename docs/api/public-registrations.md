@@ -47,6 +47,7 @@ Code: `ZonarHub.ApiService/Endpoints/Public/MapPublicRegistrationsEndpoints.cs`,
 
 - The code is valid for 15 minutes, and only for this tournament and address. It is not the sign-up verification code and does not use its cache key.
 - Only a salted SHA-256 hash is cached, under `public-registration-code:{tournamentId}:{email}`.
+- A code registers at most once: submissions for the same address and tournament run one at a time, so a double-clicked or retried submit gets `400 public_registrations.invalid_code` once the first one has used the code. Codes and this lock live in the API process, so they are not shared across replicas.
 - A new code replaces the previous one. A new request for the same address and tournament within 60 seconds returns `429 public_registrations.code_cooldown` and sends nothing.
 - `400 registrations.contact_email_required` or `registrations.invalid_contact_email`. `409 public_registrations.closed` outside the window.
 - The email uses the template `public_registrations.verification_code` (variables `code`, `expires_minutes`, `tournament_name`). Without a stored template it falls back to a built-in Spanish message.

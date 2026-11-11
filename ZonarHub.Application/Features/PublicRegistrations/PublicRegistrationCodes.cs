@@ -13,10 +13,14 @@ namespace ZonarHub.Application.Features.PublicRegistrations;
 /// <remarks>
 /// A code expires after <see cref="Lifetime"/>, is removed after <see cref="MaxFailedAttempts"/> wrong attempts and once a
 /// registration uses it. Another code for the same address and tournament may be requested after
-/// <see cref="ResendCooldown"/>; it replaces the previous one.
+/// <see cref="ResendCooldown"/>; it replaces the previous one. A submission holds <see cref="LockAsync"/> from
+/// verification to consumption, so two concurrent submissions with one code cannot both use it.
 /// </remarks>
 internal sealed class PublicRegistrationCodes(ICacheStore cache, IClock clock)
 {
+    // Striped in-process locks: codes live in this process's cache, so serializing here makes a code single use.
+    private static readonly SemaphoreSlim[] Stripes = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+
     public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(15);
     public static readonly TimeSpan ResendCooldown = TimeSpan.FromSeconds(60);
     public const int MaxFailedAttempts = 5;
@@ -74,6 +78,28 @@ internal sealed class PublicRegistrationCodes(ICacheStore cache, IClock clock)
         else
             await cache.SetAsync(key, entry with { FailedAttempts = failed }, entry.ExpiresAtUtc - now, cancellationToken);
         return false;
+    }
+
+    /// <summary>
+    /// Serializes the submissions of one address and tournament (and, rarely, of another key on the same stripe); dispose
+    /// the result to release it. Hold it from <see cref="VerifyAsync"/> until the code is consumed or the submission fails.
+    /// </summary>
+    public static async Task<IDisposable> LockAsync(Guid tournamentId, string email, CancellationToken cancellationToken)
+    {
+        var stripe = Stripes[(int)((uint)StringComparer.Ordinal.GetHashCode(Key(tournamentId, email)) % (uint)Stripes.Length)];
+        await stripe.WaitAsync(cancellationToken);
+        return new Release(stripe);
+    }
+
+    private sealed class Release(SemaphoreSlim stripe) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                stripe.Release();
+        }
     }
 
     /// <summary>Removes the code so it cannot be used again.</summary>
