@@ -56,6 +56,19 @@ public static class RegistrationRules
         _ => Result.Failure<RegistrationStatus>(RegistrationErrors.InvalidTransition),
     };
 
+    /// <summary>
+    /// A manual payment mark of the backoffice (D5, cash payments): <see cref="RegistrationPaymentStatus.Paid"/> from pending
+    /// or failed, <see cref="RegistrationPaymentStatus.Refunded"/> from paid. Other targets are
+    /// <see cref="RegistrationErrors.InvalidPaymentStatus"/>, other origins <see cref="RegistrationErrors.InvalidPaymentTransition"/>.
+    /// </summary>
+    public static Result CheckManualPayment(RegistrationPaymentStatus from, RegistrationPaymentStatus to) => to switch
+    {
+        RegistrationPaymentStatus.Paid when from is RegistrationPaymentStatus.Pending or RegistrationPaymentStatus.Failed => Result.Success(),
+        RegistrationPaymentStatus.Refunded when from == RegistrationPaymentStatus.Paid => Result.Success(),
+        RegistrationPaymentStatus.Paid or RegistrationPaymentStatus.Refunded => Result.Failure(RegistrationErrors.InvalidPaymentTransition),
+        _ => Result.Failure(RegistrationErrors.InvalidPaymentStatus),
+    };
+
     /// <summary>Payment status of a new registration: pending when the fee per pair is positive, else not required.</summary>
     public static RegistrationPaymentStatus InitialPaymentStatus(decimal? feePerPair) =>
         feePerPair is > 0 ? RegistrationPaymentStatus.Pending : RegistrationPaymentStatus.NotRequired;

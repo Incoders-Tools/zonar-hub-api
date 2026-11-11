@@ -23,6 +23,21 @@ public static class RegistrationErrors
     public static readonly Error InvalidContactEmail = Error.Validation("registrations.invalid_contact_email", "registrations.errors.invalid_contact_email");
     public static readonly Error NotesTooLong = Error.Validation("registrations.notes_too_long", "registrations.errors.notes_too_long");
 
+    // D3 eligibility (RegistrationEligibility).
+    public static readonly Error RequiredSlotMissing = Error.Validation("registrations.required_slot_missing", "registrations.errors.required_slot_missing");
+    public static readonly Error GenderMismatch = Error.Validation("registrations.gender_mismatch", "registrations.errors.gender_mismatch");
+    public static readonly Error CategoryOutOfRange = Error.Validation("registrations.category_out_of_range", "registrations.errors.category_out_of_range");
+    public static readonly Error AgeOutOfRange = Error.Validation("registrations.age_out_of_range", "registrations.errors.age_out_of_range");
+
+    /// <summary>A status the request may not ask for (unknown, or not pending/confirmed on creation).</summary>
+    public static readonly Error InvalidStatus = Error.Validation("registrations.invalid_status", "registrations.errors.invalid_status");
+
+    /// <summary>A payment status the backoffice may not mark (only paid and refunded).</summary>
+    public static readonly Error InvalidPaymentStatus = Error.Validation("registrations.invalid_payment_status", "registrations.errors.invalid_payment_status");
+
+    /// <summary>The current payment status does not allow the mark (paid needs pending or failed, refunded needs paid).</summary>
+    public static readonly Error InvalidPaymentTransition = Error.Conflict("registrations.invalid_payment_transition", "registrations.errors.invalid_payment_transition");
+
     private static readonly IReadOnlyDictionary<string, Error> StoreRefusals = new[]
     {
         CapacityReached, PlayerAlreadyRegistered, ConcurrentModification, InvalidTransition, TournamentNotFound, PlayerNotFound,

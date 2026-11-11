@@ -16,6 +16,8 @@ public static class PlayerErrors
     public static readonly Error InvalidEmail = Error.Validation("players.invalid_email", "players.errors.invalid_email");
     public static readonly Error FieldTooLong = Error.Validation("players.field_too_long", "players.errors.field_too_long");
     public static readonly Error BirthDateInFuture = Error.Validation("players.birth_date_in_future", "players.errors.birth_date_in_future");
+    public static readonly Error UnknownGender = Error.Validation("players.unknown_gender", "players.errors.unknown_gender");
+    public static readonly Error UnknownCategory = Error.Validation("players.unknown_category", "players.errors.unknown_category");
     public static readonly Error EmailTaken = Error.Conflict("players.email_taken", "players.errors.email_taken");
     public static readonly Error DocumentTaken = Error.Conflict("players.document_taken", "players.errors.document_taken");
     public static readonly Error UserTaken = Error.Conflict("players.user_taken", "players.errors.user_taken");
