@@ -8,7 +8,7 @@ Persistence and the SQL functions are those of migration `20261110100000_tournam
 
 - Every route requires the `AdminOrAbove` policy.
 - Organization routes (`/api/admin/organizations/{organizationId}/…`) apply the tournament tenant rule to the organization. System administrators may manage any organization; other callers only an organization of their own tenant. Unknown or foreign organizations return `403` (`tournaments.forbidden`).
-- Tournament routes (`/api/admin/tournaments/{tournamentId}/registrations…`) return `404` (`tournaments.not_found`) for an unknown tournament and `403` (`tournaments.forbidden`) for a tournament outside the caller's tenant, before anything else.
+- Tournament routes (`/api/admin/tournaments/{tournamentId}/registrations…` and `…/eligibility-profile`) return `404` (`tournaments.not_found`) for an unknown tournament and `403` (`tournaments.forbidden`) for a tournament outside the caller's tenant, before anything else.
 - Errors are RFC 7807 problems: `code` is the stable error code and `detail` its message key (`players.errors.*`, `eligibility_profiles.errors.*`, `registrations.errors.*`).
 
 ## Players
@@ -35,7 +35,18 @@ Persistence and the SQL functions are those of migration `20261110100000_tournam
 | `DELETE …/eligibility-profiles/{id}` | `204`, `404`, `409 eligibility_profiles.in_use` while a tournament references it |
 
 - Body: `{ name, description?, isActive, slots: [{ slotNumber, genderId?, categoryId?, minAge?, maxAge?, label?, required }] }`. `required` defaults to `true`. Slots are returned in slot order.
-- This API does not set `tournaments.eligibility_profile_id`. A tournament that references an active profile uses the profile's slots for D3. An inactive profile is ignored, and the tournament's own rules apply (L8).
+- A tournament that references an active profile uses the profile's slots for D3. An inactive profile is ignored, and the tournament's own rules apply (L8).
+
+### Tournament profile
+
+| Route | Result |
+| --- | --- |
+| `GET /api/admin/tournaments/{tournamentId}/eligibility-profile` | `200 { eligibilityProfileId }`, `null` when the tournament has none |
+| `PUT /api/admin/tournaments/{tournamentId}/eligibility-profile` | `200` with the same body, `404 eligibility_profiles.not_found` |
+
+- Body: `{ eligibilityProfileId }`. The profile must belong to the tournament's own organization; an unknown profile or one of another organization (even of the caller's tenant) is `404 eligibility_profiles.not_found`, and nothing is written. `null` clears the assignment.
+- An inactive profile may be assigned. While it stays inactive it is ignored and the tournament's own rules apply (L8); reactivating it makes it apply again.
+- The tournament create and update contracts do not carry this field, so a tournament update never changes or clears the assigned profile.
 
 ## Registrations
 

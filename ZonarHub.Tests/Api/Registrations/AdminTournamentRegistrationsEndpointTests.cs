@@ -511,6 +511,7 @@ public class AdminTournamentRegistrationsEndpointTests
         const string Registrations = "/api/admin/tournaments/{tournamentId:guid}/registrations";
         const string Players = "/api/admin/organizations/{organizationId:guid}/players";
         const string Profiles = "/api/admin/organizations/{organizationId:guid}/eligibility-profiles";
+        const string TournamentProfile = "/api/admin/tournaments/{tournamentId:guid}/eligibility-profile";
         Assert.Equal(
             [
                 $"DELETE {Profiles}/{{id:guid}}",
@@ -518,6 +519,7 @@ public class AdminTournamentRegistrationsEndpointTests
                 $"GET {Profiles}/{{id:guid}}",
                 $"GET {Players}/",
                 $"GET {Players}/{{id:guid}}",
+                $"GET {TournamentProfile}/",
                 $"GET {Registrations}/",
                 $"GET {Registrations}/draw-participants",
                 $"GET {Registrations}/{{registrationId:guid}}",
@@ -530,6 +532,7 @@ public class AdminTournamentRegistrationsEndpointTests
                 $"POST {Registrations}/{{registrationId:guid}}/waitlist",
                 $"PUT {Profiles}/{{id:guid}}",
                 $"PUT {Players}/{{id:guid}}",
+                $"PUT {TournamentProfile}/",
                 $"PUT {Registrations}/{{registrationId:guid}}/payment",
             ],
             endpoints

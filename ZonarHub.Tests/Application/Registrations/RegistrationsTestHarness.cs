@@ -1,6 +1,8 @@
 using MediatR;
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Application.Common.Pagination;
+using ZonarHub.Application.Features.AdminTournaments.GetById;
+using ZonarHub.Application.Features.AdminTournaments.Update;
 using ZonarHub.Application.Features.EligibilityProfiles;
 using ZonarHub.Application.Features.Players;
 using ZonarHub.Application.Features.TournamentRegistrations;
@@ -35,7 +37,7 @@ internal sealed class RegistrationsTestHarness
     {
         Tournaments = new AdminTournamentsListTestHarness(Now);
         Players = new InMemoryPlayerRepository();
-        Profiles = new InMemoryEligibilityProfileRepository();
+        Profiles = new InMemoryEligibilityProfileRepository(Tournaments.Tournaments);
         Registrations = new InMemoryTournamentRegistrationRepository(Players, Tournaments.Tournaments, Now);
         Genders.Items.AddRange([Gender(Male, "male"), Gender(Female, "female"), Gender(Mixed, "mixed")]);
         Categories.Items.AddRange([Category(Third, 3), Category(Fourth, 4), Category(Sixth, 6)]);
@@ -51,6 +53,8 @@ internal sealed class RegistrationsTestHarness
         CreateProfile = new CreateEligibilityProfileHandler(u.CurrentUser, u.Users, u.Organizations, Profiles, Genders, Categories, u.Clock);
         UpdateProfile = new UpdateEligibilityProfileHandler(u.CurrentUser, u.Users, u.Organizations, Profiles, Genders, Categories, u.Clock);
         DeleteProfile = new DeleteEligibilityProfileHandler(u.CurrentUser, u.Users, u.Organizations, Profiles);
+        GetTournamentProfile = new GetTournamentEligibilityProfileHandler(u.CurrentUser, u.Users, u.Organizations, Tournaments.Tournaments, Profiles);
+        SetTournamentProfile = new SetTournamentEligibilityProfileHandler(u.CurrentUser, u.Users, u.Organizations, Tournaments.Tournaments, Profiles);
         ListRegistrations = new ListTournamentRegistrationsHandler(u.CurrentUser, u.Users, u.Organizations, Tournaments.Tournaments, Registrations);
         GetRegistration = new GetTournamentRegistrationHandler(u.CurrentUser, u.Users, u.Organizations, Tournaments.Tournaments, Registrations);
         CreateRegistration = new CreateTournamentRegistrationHandler(
@@ -77,6 +81,8 @@ internal sealed class RegistrationsTestHarness
     public CreateEligibilityProfileHandler CreateProfile { get; }
     public UpdateEligibilityProfileHandler UpdateProfile { get; }
     public DeleteEligibilityProfileHandler DeleteProfile { get; }
+    public GetTournamentEligibilityProfileHandler GetTournamentProfile { get; }
+    public SetTournamentEligibilityProfileHandler SetTournamentProfile { get; }
     public ListTournamentRegistrationsHandler ListRegistrations { get; }
     public GetTournamentRegistrationHandler GetRegistration { get; }
     public CreateTournamentRegistrationHandler CreateRegistration { get; }
@@ -177,6 +183,10 @@ internal sealed class RegistrationsTestHarness
                 CreateEligibilityProfileCommand command => await h.CreateProfile.Handle(command, cancellationToken),
                 UpdateEligibilityProfileCommand command => await h.UpdateProfile.Handle(command, cancellationToken),
                 DeleteEligibilityProfileCommand command => await h.DeleteProfile.Handle(command, cancellationToken),
+                GetTournamentEligibilityProfileQuery query => await h.GetTournamentProfile.Handle(query, cancellationToken),
+                SetTournamentEligibilityProfileCommand command => await h.SetTournamentProfile.Handle(command, cancellationToken),
+                GetTournamentByIdQuery query => await h.Tournaments.GetById.Handle(query, cancellationToken),
+                UpdateTournamentCommand command => await h.Tournaments.Update.Handle(command, cancellationToken),
                 ListTournamentRegistrationsQuery query => await h.ListRegistrations.Handle(query, cancellationToken),
                 GetTournamentRegistrationQuery query => await h.GetRegistration.Handle(query, cancellationToken),
                 CreateTournamentRegistrationCommand command => await h.CreateRegistration.Handle(command, cancellationToken),
@@ -307,9 +317,10 @@ internal sealed class InMemoryPlayerRepository : IPlayerRepository
 
 /// <summary>
 /// Profiles by id with the store's unique name (any case) per organization, the tournament references of
-/// <c>tournaments.eligibility_profile_id</c> and its delete restriction.
+/// <c>tournaments.eligibility_profile_id</c> (foreign key to an existing profile, no row for an unknown tournament) and
+/// its delete restriction. <see cref="BeforeNextWrite"/> commits a concurrent change before the next tournament write.
 /// </summary>
-internal sealed class InMemoryEligibilityProfileRepository : IEligibilityProfileRepository
+internal sealed class InMemoryEligibilityProfileRepository(RecordingTournamentAdminRepository tournaments) : IEligibilityProfileRepository
 {
     private readonly Dictionary<EligibilityProfileId, EligibilityProfile> _profiles = [];
 
@@ -317,9 +328,14 @@ internal sealed class InMemoryEligibilityProfileRepository : IEligibilityProfile
 
     public List<string> Writes { get; } = [];
 
+    public Action? BeforeNextWrite { get; set; }
+
     public EligibilityProfile? Find(EligibilityProfileId id) => _profiles.GetValueOrDefault(id);
 
     public void Seed(EligibilityProfile profile) => _profiles[profile.Id] = profile;
+
+    /// <summary>Removes a profile as another writer would (no recorded write).</summary>
+    public void Remove(EligibilityProfileId id) => _profiles.Remove(id);
 
     public Task<IReadOnlyList<EligibilityProfile>> ListByOrganizationAsync(OrganizationId organizationId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<EligibilityProfile>>(_profiles.Values
@@ -334,6 +350,28 @@ internal sealed class InMemoryEligibilityProfileRepository : IEligibilityProfile
 
     public Task<EligibilityProfileId?> GetTournamentProfileIdAsync(Guid tournamentId, CancellationToken cancellationToken = default) =>
         Task.FromResult(TournamentProfiles.TryGetValue(tournamentId, out var id) ? id : (EligibilityProfileId?)null);
+
+    public async Task<bool> SetTournamentProfileIdAsync(
+        Guid tournamentId,
+        EligibilityProfileId? profileId,
+        CancellationToken cancellationToken = default)
+    {
+        var concurrent = BeforeNextWrite;
+        BeforeNextWrite = null;
+        concurrent?.Invoke();
+
+        if (await tournaments.GetByIdAsync(tournamentId, cancellationToken) is null)
+            return false;
+        if (profileId is { } id && !_profiles.ContainsKey(id))
+            throw new PersistenceConflictException(EligibilityProfileErrors.NotFound);
+
+        Writes.Add($"tournament:{tournamentId}:{(profileId is { } written ? written.ToString() : "none")}");
+        if (profileId is { } assigned)
+            TournamentProfiles[tournamentId] = assigned;
+        else
+            TournamentProfiles.Remove(tournamentId);
+        return true;
+    }
 
     public Task<EligibilityProfile> SaveAsync(EligibilityProfile profile, CancellationToken cancellationToken = default)
     {

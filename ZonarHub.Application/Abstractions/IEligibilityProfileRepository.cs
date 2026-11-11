@@ -26,6 +26,18 @@ public interface IEligibilityProfileRepository
     /// </summary>
     Task<EligibilityProfileId?> GetTournamentProfileIdAsync(Guid tournamentId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Writes only the tournament's <c>eligibility_profile_id</c> (null clears it); false when the tournament does not
+    /// exist. Callers check first that the profile belongs to the tournament's organization (the store does not).
+    /// </summary>
+    /// <exception cref="PersistenceConflictException">
+    /// <see cref="EligibilityProfileErrors.NotFound"/> when the profile no longer exists (nothing is written).
+    /// </exception>
+    Task<bool> SetTournamentProfileIdAsync(
+        Guid tournamentId,
+        EligibilityProfileId? profileId,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Inserts the profile, or replaces its columns and every slot; returns it as stored.</summary>
     /// <exception cref="PersistenceConflictException">
     /// <see cref="EligibilityProfileErrors.NameTaken"/> when another profile of the organization has the name (any case),

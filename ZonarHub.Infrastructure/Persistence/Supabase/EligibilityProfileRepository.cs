@@ -12,7 +12,8 @@ namespace ZonarHub.Infrastructure.Persistence.Supabase;
 /// Reads embed the slots; a save is one call to <c>save_tournament_eligibility_profile</c>, which writes the profile and
 /// replaces every slot in one transaction. Store refusals become <see cref="PersistenceConflictException"/>
 /// (<see cref="EligibilityProfileErrors.NotFound"/>, <see cref="EligibilityProfileErrors.NameTaken"/>,
-/// <see cref="EligibilityProfileErrors.InUse"/>); other failures throw <see cref="HttpRequestException"/>.
+/// <see cref="EligibilityProfileErrors.InUse"/>); other failures throw <see cref="HttpRequestException"/>. The tournament's
+/// profile is one PATCH of <c>tournaments.eligibility_profile_id</c> alone, so no other tournament column is touched.
 /// </summary>
 internal sealed class EligibilityProfileRepository(IHttpClientFactory factory) : IEligibilityProfileRepository
 {
@@ -48,6 +49,24 @@ internal sealed class EligibilityProfileRepository(IHttpClientFactory factory) :
         response.EnsureSuccessStatusCode();
         var rows = await response.Content.ReadFromJsonAsync<List<TournamentProfileRow>>(cancellationToken) ?? [];
         return rows.FirstOrDefault()?.EligibilityProfileId is { } id ? new EligibilityProfileId(id) : null;
+    }
+
+    public async Task<bool> SetTournamentProfileIdAsync(
+        Guid tournamentId,
+        EligibilityProfileId? profileId,
+        CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Patch, $"{TournamentsPath}?id=eq.{tournamentId}&select=eligibility_profile_id");
+        request.Headers.Add("Prefer", "return=representation");
+        request.Content = JsonContent.Create(new TournamentProfileRow(profileId?.Value));
+        using var response = await _http.SendAsync(request, cancellationToken);
+        if (await SupabaseResponses.ReadConflictAsync(response, cancellationToken) is { } conflict
+            && conflict.Violates(SupabaseResponses.ForeignKeyViolationCode, "fk_tournaments_eligibility_profile"))
+            throw new PersistenceConflictException(EligibilityProfileErrors.NotFound);
+
+        response.EnsureSuccessStatusCode();
+        var updated = await response.Content.ReadFromJsonAsync<List<TournamentProfileRow>>(cancellationToken) ?? [];
+        return updated.Count > 0;
     }
 
     public async Task<EligibilityProfile> SaveAsync(EligibilityProfile profile, CancellationToken cancellationToken = default)

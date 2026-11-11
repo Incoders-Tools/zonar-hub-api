@@ -164,6 +164,44 @@ public class EligibilityProfileRepositoryTests
         Assert.Null(await new EligibilityProfileRepository(missing.Factory).GetTournamentProfileIdAsync(tournament));
     }
 
+    [Fact]
+    public async Task SetTournamentProfileId_PatchesOnlyTheTournamentsColumn_AndNullClearsIt()
+    {
+        var tournament = Guid.Parse("00000000-0000-0000-0000-0000000000f1");
+        var assigned = new SupabaseHttpRecorder(_ => Json($$"""[{"eligibility_profile_id":"{{Id}}"}]"""));
+        var cleared = new SupabaseHttpRecorder(_ => Json("""[{"eligibility_profile_id":null}]"""));
+        var missing = new SupabaseHttpRecorder(_ => Json("[]"));
+
+        Assert.True(await new EligibilityProfileRepository(assigned.Factory).SetTournamentProfileIdAsync(tournament, Id));
+        Assert.True(await new EligibilityProfileRepository(cleared.Factory).SetTournamentProfileIdAsync(tournament, null));
+        Assert.False(await new EligibilityProfileRepository(missing.Factory).SetTournamentProfileIdAsync(tournament, Id));
+
+        var request = assigned.Single();
+        Assert.Equal(("PATCH", "/rest/v1/tournaments", "return=representation"), (request.Method, request.Path, request.Prefer));
+        Assert.Equal([$"id=eq.{tournament}", "select=eligibility_profile_id"], request.Query);
+        var body = JsonNode.Parse(request.Body!)!.AsObject();
+        Assert.Equal(["eligibility_profile_id"], body.Select(p => p.Key));
+        Assert.Equal(Id.ToString(), body["eligibility_profile_id"]!.GetValue<string>());
+        var clear = JsonNode.Parse(cleared.Single().Body!)!.AsObject();
+        Assert.Equal(["eligibility_profile_id"], clear.Select(p => p.Key));
+        Assert.Null(clear["eligibility_profile_id"]);
+    }
+
+    [Fact]
+    public async Task SetTournamentProfileId_MissingProfile_IsNotFound_OtherFailuresThrow()
+    {
+        var tournament = Guid.Parse("00000000-0000-0000-0000-0000000000f1");
+        var deleted = new SupabaseHttpRecorder(_ => Problem(HttpStatusCode.Conflict, "23503",
+            "insert or update on table \"tournaments\" violates foreign key constraint \"fk_tournaments_eligibility_profile\""));
+        var other = new SupabaseHttpRecorder(_ => Problem(HttpStatusCode.Conflict, "23503", "violates foreign key constraint \"fk_other\""));
+
+        var error = await Assert.ThrowsAsync<PersistenceConflictException>(
+            () => new EligibilityProfileRepository(deleted.Factory).SetTournamentProfileIdAsync(tournament, Id));
+
+        Assert.Equal("eligibility_profiles.not_found", error.Error.Code);
+        await Assert.ThrowsAsync<HttpRequestException>(() => new EligibilityProfileRepository(other.Factory).SetTournamentProfileIdAsync(tournament, Id));
+    }
+
     private static string RowJson(bool slots = true)
     {
         var row = $$"""
