@@ -98,6 +98,29 @@ public sealed class Player : Entity<PlayerId>
         return Result.Success();
     }
 
+    /// <summary>
+    /// Completes this player with the optional data of <paramref name="source"/> where this player has none (D4: a public
+    /// registration never overwrites stored data). Names, activity and the user link are kept. True when anything changed;
+    /// only then is <see cref="UpdatedAtUtc"/> set to <paramref name="nowUtc"/>.
+    /// </summary>
+    /// <param name="source">An already validated player (e.g. from <see cref="Create"/>), so its values are normalized.</param>
+    public bool FillMissingFrom(Player source, DateTime nowUtc)
+    {
+        var before = (Email, Phone, DocumentId, BirthDate, GenderId, CategoryId, Club);
+        Email ??= source.Email;
+        Phone ??= source.Phone;
+        DocumentId ??= source.DocumentId;
+        BirthDate ??= source.BirthDate;
+        GenderId ??= source.GenderId;
+        CategoryId ??= source.CategoryId;
+        Club ??= source.Club;
+        if (before == (Email, Phone, DocumentId, BirthDate, GenderId, CategoryId, Club))
+            return false;
+
+        UpdatedAtUtc = nowUtc;
+        return true;
+    }
+
     /// <summary>The stored form of an email: trimmed and lowercase; null when blank.</summary>
     public static string? NormalizeEmail(string? email) =>
         string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
