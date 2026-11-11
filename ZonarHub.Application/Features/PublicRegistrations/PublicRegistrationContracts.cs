@@ -22,7 +22,7 @@ public sealed record PublicRegistrationBody(
 
 /// <summary>
 /// A participant as typed on the public form. A player of the organization with the same email (any case) or document
-/// is reused and only its empty fields are completed; otherwise a new player is created with this data.
+/// is reused as stored, and none of this data is read or written for it (L9); otherwise a new player is created with this data.
 /// </summary>
 /// <param name="GenderId">Optional id of the <c>genders</c> catalog (<c>GET /api/catalog/genders</c>).</param>
 /// <param name="CategoryId">Optional id of the <c>categories</c> catalog (<c>GET /api/catalog/categories</c>).</param>

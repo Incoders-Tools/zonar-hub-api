@@ -69,7 +69,8 @@ Code: `ZonarHub.ApiService/Endpoints/Public/MapPublicRegistrationsEndpoints.cs`,
 
 It returns `201` with `{ "reference": "…", "status": "pending", "payment": { "status": "pending", "amount": 20000 } }`.
 
-- **Players.** Each participant becomes the organization's player with that email (any case), else with that document, else a new player. An existing player is never overwritten. Only its empty fields (email, phone, document, birth date, gender, category, club) are filled. Its stored data is what the eligibility rules read.
+- **Players.** Each participant becomes the organization's player with that email (any case), else with that document, else a new player. An existing player is reused as stored and is never written from the public form, not even its empty fields (L9). The eligibility rules read its stored data, not the typed data.
+- **Existing players stay private (L9).** When a participant matches a stored player and that player cannot join, the response is always `409 public_registrations.participant_unavailable` (detail `public_registrations.errors.participant_unavailable`, shown to the player as "one of the participants cannot register; contact the organizer"). The cause is never given: the email and the document belong to two players, the player was deactivated, one player fills two slots, the player is in another active registration of the tournament, or the stored data fails a slot's gender, category or age rule (missing data fails the rule that needs it, L8). The player lookups and the tournament's registrations are read on every submission, matched or not. Errors about a new participant's typed data stay specific.
 - **Status (S4, D2).** The registration is `pending`. It is `waitlisted` when confirmed plus pending registrations already reach `maxPairs`. The organizer confirms or rejects it in the backoffice.
 - **Payment.** `payment.status` is `pending` with the fee as `amount` when the fee is positive, else `notRequired` with a null `amount`. Online payment fields will be added to `payment` without changing these.
 - **Reference.** The registration's id, to quote to the organizer.
@@ -77,9 +78,9 @@ It returns `201` with `{ "reference": "…", "status": "pending", "payment": { "
   1. `409 public_registrations.closed` outside the window. `404 eligibility_profiles.not_found` when the referenced profile is not the organization's.
   2. Input: `400 registrations.contact_email_required`, `invalid_contact_email`, `participants_required`, `players.*` (names, email, lengths, `birth_date_in_future`, `unknown_gender`, `unknown_category`), and `registrations.duplicate_player` when an email or document repeats.
   3. `400 public_registrations.invalid_code`: missing, wrong, expired, already used, or the code of another address or tournament. Five wrong attempts remove the code.
-  4. `409 public_registrations.participant_conflict` when the email and the document belong to two different players. `409 public_registrations.participant_unavailable` when the player was deactivated.
-  5. `400 registrations.invalid_slot`, `required_slot_missing`, `duplicate_player`. `409 registrations.player_already_registered` when a player is in another active registration of the tournament.
-  6. D3 eligibility: `400 registrations.gender_mismatch`, `category_out_of_range`, `age_out_of_range`. Missing player data fails the rule that needs it (L8).
+  4. Typed slots: `400 registrations.invalid_slot` (unknown or repeated slot) and `required_slot_missing`.
+  5. D3 eligibility of the new participants' typed data: `400 registrations.gender_mismatch`, `category_out_of_range`, `age_out_of_range`. Missing data fails the rule that needs it (L8).
+  6. Matched players: `409 public_registrations.participant_unavailable`, for every cause listed under **Existing players stay private**.
 - After the checks, the code is consumed, then the players and the registration are written.
 
 ## Confirmed pairs

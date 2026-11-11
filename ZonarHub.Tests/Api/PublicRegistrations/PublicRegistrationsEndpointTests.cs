@@ -365,24 +365,96 @@ public class PublicRegistrationsEndpointTests
     }
 
     [Fact]
-    public async Task Submit_ExistingPlayerByEmail_IsReused_AndOnlyItsEmptyFieldsAreFilled()
+    public async Task Submit_ExistingPlayerByEmail_IsReusedAsStored_WithoutFillingItsEmptyFields()
     {
+        // L9: the stored data decides eligibility; the typed (here ineligible) data is neither read nor written.
         var h = new PublicRegistrationsTestHarness();
-        await h.TournamentAsync();
-        var ana = h.SeedPlayer("Ana", "Gil", email: "ana@club.test", gender: Female, category: Fourth);
+        await h.TournamentAsync(genderId: Female);
+        var ana = h.SeedPlayer("Ana", "Gil", email: "ana@club.test", gender: Female);
+        var before = PlayerSnapshot(h, ana);
 
         var submitted = Assert.IsType<Created<PublicRegistrationSubmittedResponse>>(await SubmitAsync(
             h,
             await h.CodeAsync(),
             new PublicParticipantBody(1, "Anita", "Gil Paz", "ANA@club.test", "+54 11 5555", "30111222", new DateOnly(1990, 5, 1), Male, Sixth, "Norte"),
-            Participant(2, "Bea", "Paz", "bea@club.test"))).Value!;
+            Participant(2, "Bea", "Paz", "bea@club.test") with { GenderId = Female })).Value!;
 
-        var stored = h.R.Players.Find(ana.Id)!;
-        Assert.Equal(("Ana", "Gil", "ana@club.test", Female, Fourth), (stored.FirstName, stored.LastName, stored.Email, stored.GenderId, stored.CategoryId));
-        Assert.Equal(("+54 11 5555", "30111222", new DateOnly(1990, 5, 1), "Norte"), (stored.Phone, stored.DocumentId, stored.BirthDate, stored.Club));
-        Assert.Equal(Now, stored.UpdatedAtUtc);
+        Assert.Equal(before, PlayerSnapshot(h, ana));
         Assert.Equal(ana.Id, h.R.Registrations.Find(Guid.Parse(submitted.Reference))!.Participants[0].PlayerId);
-        Assert.Contains($"update:{ana.Id}", h.R.Players.Writes);
+        Assert.DoesNotContain(h.R.Players.Writes, w => w.EndsWith(ana.Id.ToString(), StringComparison.Ordinal));
+        Assert.Null(await h.R.Players.FindByDocumentAsync(new OrganizationId(h.Organization), "30111222"));
+    }
+
+    public static TheoryData<string> MatchedPlayerRefusals => new()
+    {
+        "emailAndDocumentOfTwoPlayers",
+        "inactivePlayer",
+        "alreadyRegistered",
+        "samePlayerInTwoSlots",
+        "storedGenderMismatch",
+        "storedCategoryMissing",
+        "storedCategoryOutOfRange",
+        "storedAgeOutOfRange",
+        "storedBirthDateMissing",
+    };
+
+    [Theory]
+    [MemberData(nameof(MatchedPlayerRefusals))]
+    public async Task Submit_MatchedPlayerThatCannotRegister_IsOneGenericError_WithoutWritingOrChangingAnyPlayer(string cause)
+    {
+        // L9: every refusal that depends on a stored player's data or state is the same problem, whatever the cause.
+        var h = new PublicRegistrationsTestHarness();
+        var tournament = await h.TournamentAsync();
+        SeedProfile(h, tournament, true, new EligibilitySlot(1, Female, Fourth, 18, null, null, true), new EligibilitySlot(2, Female, Fourth, 18, null, null, true));
+        var ana = h.SeedPlayer(
+            "Ana",
+            "Gil",
+            email: "ana@club.test",
+            documentId: "30111222",
+            birthDate: cause switch { "storedAgeOutOfRange" => new DateOnly(2012, 1, 1), "storedBirthDateMissing" => null, _ => new DateOnly(1990, 5, 1) },
+            gender: cause == "storedGenderMismatch" ? Male : Female,
+            category: cause switch { "storedCategoryMissing" => null, "storedCategoryOutOfRange" => Sixth, _ => Fourth },
+            isActive: cause != "inactivePlayer");
+        var eva = h.SeedPlayer("Eva", "Sol", documentId: "40111222", birthDate: new DateOnly(1990, 1, 1), gender: Female, category: Fourth);
+        if (cause == "alreadyRegistered")
+            h.R.SeedRegistration(tournament, RegistrationStatus.Waitlisted, ana, h.SeedPlayer("Flor", "Luz"));
+        var typedAna = new PublicParticipantBody(1, "Ana", "Gil", "ana@club.test", "+54 11 5555", null, new DateOnly(1990, 5, 1), Female, Fourth, "Norte");
+        var bea = new PublicParticipantBody(2, "Bea", "Paz", "bea@club.test", null, null, new DateOnly(1990, 1, 1), Female, Fourth);
+        PublicParticipantBody[] participants = cause switch
+        {
+            "emailAndDocumentOfTwoPlayers" => [typedAna with { DocumentId = "40111222" }, bea],
+            "samePlayerInTwoSlots" => [typedAna, bea with { Email = null, DocumentId = "30111222" }],
+            _ => [typedAna, bea],
+        };
+        var code = await h.CodeAsync();
+        var before = (h.StoreSnapshot(), PlayerSnapshot(h, ana), PlayerSnapshot(h, eva));
+
+        var result = await Endpoints.SubmitAsync(Slug, new PublicRegistrationBody(Contact, code, participants), h.Sender, CancellationToken.None);
+
+        var problem = Assert.IsType<ProblemHttpResult>(result);
+        Assert.Equal(
+            (StatusCodes.Status409Conflict, "Conflict", "public_registrations.errors.participant_unavailable"),
+            (problem.StatusCode, problem.ProblemDetails.Title, problem.ProblemDetails.Detail));
+        Assert.Equal(["code"], problem.ProblemDetails.Extensions.Keys);
+        Assert.Equal("public_registrations.participant_unavailable", problem.ProblemDetails.Extensions["code"]);
+        Assert.Equal(before, (h.StoreSnapshot(), PlayerSnapshot(h, ana), PlayerSnapshot(h, eva)));
+        Assert.Single(h.Email.Sent);
+    }
+
+    [Fact]
+    public async Task Submit_NewParticipantNextToARefusedMatchedPlayer_KeepsItsSpecificError()
+    {
+        // Errors about newly typed data stay specific (L9), even when a matched player would also be refused.
+        var h = new PublicRegistrationsTestHarness();
+        await h.TournamentAsync(genderId: Female);
+        h.SeedPlayer("Ana", "Gil", email: "ana@club.test", gender: Male);
+        var code = await h.CodeAsync();
+        var before = h.StoreSnapshot();
+
+        var result = await SubmitAsync(h, code, Participant(1, "Ana", "Gil", "ana@club.test"), Participant(2, "Bea", "Paz", "bea@club.test") with { GenderId = Male });
+
+        AssertProblem(result, StatusCodes.Status400BadRequest, "registrations.gender_mismatch");
+        Assert.Equal(before, h.StoreSnapshot());
     }
 
     [Fact]
@@ -405,9 +477,6 @@ public class PublicRegistrationsEndpointTests
     }
 
     [Theory]
-    [InlineData("emailAndDocumentOfDifferentPlayers", 409, "public_registrations.participant_conflict")]
-    [InlineData("inactivePlayer", 409, "public_registrations.participant_unavailable")]
-    [InlineData("alreadyRegistered", 409, "registrations.player_already_registered")]
     [InlineData("samePersonTwice", 400, "registrations.duplicate_player")]
     [InlineData("sameEmailAnyCase", 400, "registrations.duplicate_player")]
     [InlineData("sameDocument", 400, "registrations.duplicate_player")]
@@ -418,18 +487,14 @@ public class PublicRegistrationsEndpointTests
     [InlineData("noParticipants", 400, "registrations.participants_required")]
     [InlineData("onePlayerForDoubles", 400, "registrations.required_slot_missing")]
     [InlineData("thirdSlotForDoubles", 400, "registrations.invalid_slot")]
+    [InlineData("sameSlotTwice", 400, "registrations.invalid_slot")]
     public async Task Submit_InvalidParticipants_AreRefusedWithoutWriting_AndKeepTheCode(string scenario, int status, string code)
     {
         var h = new PublicRegistrationsTestHarness();
-        var tournament = await h.TournamentAsync();
-        var ana = h.SeedPlayer("Ana", "Gil", email: "ana@club.test", isActive: scenario != "inactivePlayer");
-        h.SeedPlayer("Eva", "Sol", documentId: "40111222");
-        if (scenario == "alreadyRegistered")
-            h.R.SeedRegistration(tournament, RegistrationStatus.Waitlisted, ana, h.SeedPlayer("Flor", "Luz"));
+        await h.TournamentAsync();
         var bea = Participant(2, "Bea", "Paz", "bea@club.test");
         PublicParticipantBody[] participants = scenario switch
         {
-            "emailAndDocumentOfDifferentPlayers" => [Participant(1, "Ana", "Gil", "ana@club.test", document: "40111222"), bea],
             "samePersonTwice" => [Participant(1, "Bea", "Paz", "bea@club.test"), bea],
             "sameEmailAnyCase" => [Participant(1, "Bea", "Paz", " BEA@club.test"), bea],
             "sameDocument" => [Participant(1, "Eva", "Sol", document: "50111222"), Participant(2, "Eva", "Sol", document: " 50111222 ")],
@@ -439,6 +504,7 @@ public class PublicRegistrationsEndpointTests
             "birthDateInFuture" => [Participant(1, "Ana", "Gil", "new@club.test") with { BirthDate = new DateOnly(2027, 1, 1) }, bea],
             "noParticipants" => [],
             "onePlayerForDoubles" => [bea],
+            "sameSlotTwice" => [Participant(2, "Ana", "Gil", "new@club.test"), bea],
             "thirdSlotForDoubles" => [Participant(1, "Ana", "Gil", "new@club.test"), bea, Participant(3, "Eva", "Luz", "eva@club.test")],
             _ => [Participant(1, "Ana", "Gil", "ana@club.test"), bea],
         };
@@ -647,6 +713,9 @@ public class PublicRegistrationsEndpointTests
         h.R.Profiles.Seed(profile);
         h.R.Profiles.TournamentProfiles[tournament.Id] = profile.Id;
     }
+
+    /// <summary>Every stored value of the player, to prove the public flow left it byte-for-byte unchanged.</summary>
+    private static string PlayerSnapshot(PublicRegistrationsTestHarness h, Player player) => JsonSerializer.Serialize(h.R.Players.Find(player.Id));
 
     private static DateOnly Day(string value) => DateOnly.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
 

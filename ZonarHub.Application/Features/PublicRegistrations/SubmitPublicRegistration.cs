@@ -23,17 +23,20 @@ public sealed record SubmitPublicRegistrationCommand(string Slug, PublicRegistra
 /// <see cref="Player"/> with catalog references (<c>players.*</c>), no email or document repeated
 /// (<see cref="RegistrationErrors.DuplicatePlayer"/>);</item>
 /// <item>the code of the contact email for this tournament (<see cref="PublicRegistrationErrors.InvalidCode"/>);</item>
-/// <item>each participant is the organization's player with its email, else with its document, else a new player
-/// (<see cref="PublicRegistrationErrors.ParticipantConflict"/> when they are two players,
-/// <see cref="PublicRegistrationErrors.ParticipantUnavailable"/> for a deactivated one); a reused player is only completed
-/// (<see cref="Player.FillMissingFrom"/>);</item>
-/// <item>the <see cref="RegistrationRequest"/> rules; no participant in another active registration of the tournament
-/// (<see cref="RegistrationErrors.PlayerAlreadyRegistered"/>); D3 eligibility of the resulting player data, where missing
-/// data fails the rule that needs it (L8).</item>
+/// <item>the typed slots: the <see cref="RegistrationRequest"/> rules, then every filled slot exists and every required
+/// slot is filled (<see cref="RegistrationErrors.InvalidSlot"/>, <see cref="RegistrationErrors.RequiredSlotMissing"/>);</item>
+/// <item>each participant is the organization's player with its email, else with its document, else a new player. The
+/// lookups and the tournament's registrations are read on every request, matched or not;</item>
+/// <item>D3 eligibility of the new players' typed data, with its specific errors; missing data fails the rule that needs
+/// it (L8);</item>
+/// <item>the matched players (L9): any refusal that depends on a stored player (email and document of two players, a
+/// deactivated player, one player in two slots, a player in another active registration of the tournament, or its stored
+/// data failing D3) is the single <see cref="PublicRegistrationErrors.ParticipantUnavailable"/>, whatever the cause.</item>
 /// </list>
-/// Then the code is consumed, new players are added, completed players updated and the registration created as
-/// <c>pending</c> (the store makes it <c>waitlisted</c> when confirmed plus pending reach the places). A refusal of the
-/// store after the code was consumed returns its error; players written before it remain (they are valid records).
+/// A matched player is reused as stored and never written from the public form (L9). Then the code is consumed, new
+/// players are added and the registration created as <c>pending</c> (the store makes it <c>waitlisted</c> when confirmed
+/// plus pending reach the places). A refusal of the store after the code was consumed returns its error; players written
+/// before it remain (they are valid records).
 /// </remarks>
 public sealed class SubmitPublicRegistrationHandler
     : IRequestHandler<SubmitPublicRegistrationCommand, Result<PublicRegistrationSubmittedResponse>>
@@ -96,45 +99,36 @@ public sealed class SubmitPublicRegistrationHandler
         if (!await _codes.VerifyAsync(tournament.Id, email.Value, body.Code, cancellationToken))
             return Failure(PublicRegistrationErrors.InvalidCode);
 
-        var resolved = await ResolveAsync(organization, typed.Value, now, cancellationToken);
-        if (resolved.IsFailure)
-            return Failure(resolved.Error);
+        var eligibility = catalog.ToEligibilityCatalog();
+        var today = DateOnly.FromDateTime(now);
+        var shape = Request(tournament, email.Value, body.PublicNameConsent, typed.Value.Select(t => (t.SlotNumber, t.Player.Id)));
+        if (shape.IsFailure)
+            return Failure(shape.Error);
 
-        var participants = resolved.Value;
-        var built = RegistrationRequest.Create(
-            new TournamentId(tournament.Id),
-            RegistrationSource.Public,
-            RegistrationStatus.Pending,
-            RegistrationRules.InitialPaymentStatus(tournament.RegistrationFeePerPair),
-            email.Value,
-            null,
-            body.PublicNameConsent,
-            participants.Select(p => new RegistrationParticipant(p.SlotNumber, p.Player.Id)).ToList());
+        var unrestricted = slots.Value.Select(s => s with { GenderId = null, CategoryId = null, MinAge = null, MaxAge = null }).ToList();
+        var filled = RegistrationEligibility.Check(unrestricted, typed.Value.Select(t => Candidate(t.SlotNumber, t.Player)).ToList(), eligibility, today);
+        if (filled.IsFailure)
+            return Failure(filled.Error);
+
+        var matches = await MatchAsync(organization, typed.Value, cancellationToken);
+        var registered = await _registrations.ListByTournamentAsync(tournament.Id, null, cancellationToken);
+
+        var fresh = CheckSlots(slots.Value, matches.Where(m => m.Existing is null).Select(m => Candidate(m.SlotNumber, m.Typed)), eligibility, today);
+        if (fresh.IsFailure)
+            return Failure(fresh.Error);
+
+        if (!MatchedCanRegister(matches, registered, slots.Value, eligibility, today))
+            return Failure(PublicRegistrationErrors.ParticipantUnavailable);
+
+        // The shape passed and every player is distinct; this only guards the domain invariants.
+        var built = Request(tournament, email.Value, body.PublicNameConsent, matches.Select(m => (m.SlotNumber, (m.Existing ?? m.Typed).Id)));
         if (built.IsFailure)
             return Failure(built.Error);
 
-        var reused = participants.Where(p => p.Write != PlayerWrite.Add).Select(p => p.Player.Id).ToHashSet();
-        var active = await _registrations.ListByTournamentAsync(tournament.Id, null, cancellationToken);
-        if (active.Any(d => d.Registration.IsActive && d.Registration.Participants.Any(p => reused.Contains(p.PlayerId))))
-            return Failure(RegistrationErrors.PlayerAlreadyRegistered);
-
-        var eligible = RegistrationEligibility.Check(
-            slots.Value,
-            participants.Select(p => new EligibilityCandidate(p.SlotNumber, p.Player.GenderId, p.Player.CategoryId, p.Player.BirthDate)).ToList(),
-            catalog.ToEligibilityCatalog(),
-            DateOnly.FromDateTime(now));
-        if (eligible.IsFailure)
-            return Failure(eligible.Error);
-
         await _codes.ConsumeAsync(tournament.Id, email.Value, cancellationToken);
-        foreach (var participant in participants.OrderBy(p => p.SlotNumber))
+        foreach (var match in matches.Where(m => m.Existing is null).OrderBy(m => m.SlotNumber))
         {
-            var written = participant.Write switch
-            {
-                PlayerWrite.Add => await PersistenceWrites.TryAsync(() => _players.AddAsync(participant.Player, cancellationToken)),
-                PlayerWrite.Update => await PersistenceWrites.TryAsync(() => _players.UpdateAsync(participant.Player, cancellationToken)),
-                _ => Result.Success(),
-            };
+            var written = await PersistenceWrites.TryAsync(() => _players.AddAsync(match.Typed, cancellationToken));
             if (written.IsFailure)
                 return Failure(written.Error);
         }
@@ -195,46 +189,87 @@ public sealed class SubmitPublicRegistrationHandler
         }
     }
 
-    /// <summary>The organization's player of each participant, completed with the typed data, or the typed new player.</summary>
-    private async Task<Result<IReadOnlyList<ResolvedParticipant>>> ResolveAsync(
+    /// <summary>The organization's players with each participant's email and with its document; both lookups always run.</summary>
+    private async Task<IReadOnlyList<ParticipantMatch>> MatchAsync(
         OrganizationId organization,
         IReadOnlyList<(int SlotNumber, Player Player)> typed,
-        DateTime now,
         CancellationToken cancellationToken)
     {
-        var resolved = new List<ResolvedParticipant>();
+        var matches = new List<ParticipantMatch>();
         foreach (var (slot, input) in typed)
         {
             var byEmail = input.Email is { } email ? await _players.FindByEmailAsync(organization, email, cancellationToken) : null;
             var byDocument = input.DocumentId is { } document ? await _players.FindByDocumentAsync(organization, document, cancellationToken) : null;
-            if (byEmail is not null && byDocument is not null && byEmail.Id != byDocument.Id)
-                return Result.Failure<IReadOnlyList<ResolvedParticipant>>(PublicRegistrationErrors.ParticipantConflict);
-
-            var existing = byEmail ?? byDocument;
-            if (existing is null)
-            {
-                resolved.Add(new ResolvedParticipant(slot, input, PlayerWrite.Add));
-                continue;
-            }
-
-            if (!existing.IsActive)
-                return Result.Failure<IReadOnlyList<ResolvedParticipant>>(PublicRegistrationErrors.ParticipantUnavailable);
-
-            var completed = existing.FillMissingFrom(input, now);
-            resolved.Add(new ResolvedParticipant(slot, existing, completed ? PlayerWrite.Update : PlayerWrite.None));
+            matches.Add(new ParticipantMatch(slot, input, byEmail, byDocument));
         }
 
-        return Result.Success<IReadOnlyList<ResolvedParticipant>>(resolved);
+        return matches;
     }
+
+    /// <summary>
+    /// True when every matched player may join as stored: one player per participant, active, in no other active
+    /// registration of the tournament and eligible with its stored data. The caller never learns which rule failed (L9).
+    /// </summary>
+    private static bool MatchedCanRegister(
+        IReadOnlyList<ParticipantMatch> matches,
+        IReadOnlyList<TournamentRegistrationDetails> registered,
+        IReadOnlyList<EligibilitySlot> slots,
+        EligibilityCatalog eligibility,
+        DateOnly today)
+    {
+        var matched = matches.Where(m => m.Existing is not null).ToList();
+        if (matched.Any(m => m.IsConflict || !m.Existing!.IsActive))
+            return false;
+
+        var ids = matched.Select(m => m.Existing!.Id).ToList();
+        if (ids.Distinct().Count() != ids.Count)
+            return false;
+
+        if (registered.Any(d => d.Registration.IsActive && d.Registration.Participants.Any(p => ids.Contains(p.PlayerId))))
+            return false;
+
+        return CheckSlots(slots, matched.Select(m => Candidate(m.SlotNumber, m.Existing!)), eligibility, today).IsSuccess;
+    }
+
+    /// <summary>D3 rules of only the given participants' slots (the filled and required slots are checked beforehand).</summary>
+    private static Result CheckSlots(
+        IReadOnlyList<EligibilitySlot> slots,
+        IEnumerable<EligibilityCandidate> candidates,
+        EligibilityCatalog eligibility,
+        DateOnly today)
+    {
+        var subset = candidates.ToList();
+        var numbers = subset.Select(c => c.SlotNumber).ToHashSet();
+        return RegistrationEligibility.Check(slots.Where(s => numbers.Contains(s.SlotNumber)).ToList(), subset, eligibility, today);
+    }
+
+    private static EligibilityCandidate Candidate(int slotNumber, Player player) =>
+        new(slotNumber, player.GenderId, player.CategoryId, player.BirthDate);
+
+    private static Result<RegistrationRequest> Request(
+        TournamentAdminDto tournament,
+        string contactEmail,
+        bool publicNameConsent,
+        IEnumerable<(int SlotNumber, PlayerId PlayerId)> participants) =>
+        RegistrationRequest.Create(
+            new TournamentId(tournament.Id),
+            RegistrationSource.Public,
+            RegistrationStatus.Pending,
+            RegistrationRules.InitialPaymentStatus(tournament.RegistrationFeePerPair),
+            contactEmail,
+            null,
+            publicNameConsent,
+            participants.Select(p => new RegistrationParticipant(p.SlotNumber, p.PlayerId)).ToList());
 
     private static Result<PublicRegistrationSubmittedResponse> Failure(Error error) => Result.Failure<PublicRegistrationSubmittedResponse>(error);
 
-    private enum PlayerWrite
+    /// <summary>A typed participant and the organization's players with its email and with its document.</summary>
+    private sealed record ParticipantMatch(int SlotNumber, Player Typed, Player? ByEmail, Player? ByDocument)
     {
-        None,
-        Add,
-        Update,
-    }
+        /// <summary>The stored player this participant is; null for a new player.</summary>
+        public Player? Existing => ByEmail ?? ByDocument;
 
-    private sealed record ResolvedParticipant(int SlotNumber, Player Player, PlayerWrite Write);
+        /// <summary>The email and the document belong to two different players.</summary>
+        public bool IsConflict => ByEmail is not null && ByDocument is not null && ByEmail.Id != ByDocument.Id;
+    }
 }

@@ -18,9 +18,11 @@ public static class PublicRegistrationErrors
     /// <summary>A code for this address and tournament was sent less than the resend wait ago (HTTP 429).</summary>
     public static readonly Error CodeCooldown = Error.Conflict("public_registrations.code_cooldown", "public_registrations.errors.code_cooldown");
 
-    /// <summary>The participant's email and document belong to two different players of the organization.</summary>
-    public static readonly Error ParticipantConflict = Error.Conflict("public_registrations.participant_conflict", "public_registrations.errors.participant_conflict");
-
-    /// <summary>The participant matches a player the organization deactivated.</summary>
+    /// <summary>
+    /// The single public refusal of a participant that matches a stored player of the organization (L9), whatever the cause:
+    /// email and document of two players, a deactivated player, one player in two slots, a player already in an active
+    /// registration of the tournament, or stored data failing the eligibility rules. It never tells which one, so the
+    /// public form cannot probe stored players.
+    /// </summary>
     public static readonly Error ParticipantUnavailable = Error.Conflict("public_registrations.participant_unavailable", "public_registrations.errors.participant_unavailable");
 }
