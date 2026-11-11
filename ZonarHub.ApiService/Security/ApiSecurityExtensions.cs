@@ -1,5 +1,6 @@
 using System.Net;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
@@ -66,6 +67,20 @@ internal static class ApiSecurityExtensions
 
     public static IApplicationBuilder UseApiSecurity(this IApplicationBuilder app)
     {
+        var security = app.ApplicationServices.GetRequiredService<IOptions<ApiSecurityOptions>>().Value;
+        if (security.TrustForwardedHeaders)
+        {
+            // Only the hop the hosting proxy appended (ForwardLimit 1); earlier values come from the client and are ignored.
+            var forwarded = new ForwardedHeadersOptions
+            {
+                ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+                ForwardLimit = 1,
+            };
+            forwarded.KnownIPNetworks.Clear();
+            forwarded.KnownProxies.Clear();
+            app.UseForwardedHeaders(forwarded);
+        }
+
         app.UseMiddleware<IpBlockListMiddleware>();
         app.UseRateLimiter();
         return app;
@@ -94,6 +109,12 @@ internal sealed class ApiSecurityOptions
     public int PublicRegistrationCodePermitLimit { get; init; } = 10;
 
     public int WindowSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// Use the client address the hosting proxy appends to <c>X-Forwarded-For</c> (last hop only) for rate limits and the
+    /// block list. Enable only where every request reaches the API through that proxy.
+    /// </summary>
+    public bool TrustForwardedHeaders { get; init; }
 
     public string[] RejectedIpAddresses { get; init; } = [];
 }
