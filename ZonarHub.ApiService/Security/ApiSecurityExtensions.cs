@@ -1,5 +1,6 @@
 using System.Net;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
@@ -15,6 +16,7 @@ internal static class ApiSecurityExtensions
             .Bind(configuration.GetSection(ApiSecurityOptions.SectionName))
             .Validate(options => options.GlobalPermitLimit > 0, "Security:GlobalPermitLimit must be greater than zero.")
             .Validate(options => options.AnonymousAuthPermitLimit > 0, "Security:AnonymousAuthPermitLimit must be greater than zero.")
+            .Validate(options => options.PublicRegistrationCodePermitLimit > 0, "Security:PublicRegistrationCodePermitLimit must be greater than zero.")
             .Validate(options => options.WindowSeconds > 0, "Security:WindowSeconds must be greater than zero.")
             .ValidateOnStart();
 
@@ -35,26 +37,50 @@ internal static class ApiSecurityExtensions
                     });
             });
 
-            options.AddPolicy(ApiRateLimitPolicies.AnonymousAuth, context =>
-            {
-                var security = context.RequestServices.GetRequiredService<IOptions<ApiSecurityOptions>>().Value;
-                return RateLimitPartition.GetFixedWindowLimiter(
-                    GetPartitionKey(context),
-                    _ => new FixedWindowRateLimiterOptions
-                    {
-                        AutoReplenishment = true,
-                        PermitLimit = security.AnonymousAuthPermitLimit,
-                        QueueLimit = 0,
-                        Window = TimeSpan.FromSeconds(security.WindowSeconds),
-                    });
-            });
+            options.AddPolicy(ApiRateLimitPolicies.AnonymousAuth, context => PolicyPartition(ApiRateLimitPolicies.AnonymousAuth, context));
+            options.AddPolicy(ApiRateLimitPolicies.PublicRegistrationCode, context => PolicyPartition(ApiRateLimitPolicies.PublicRegistrationCode, context));
         });
 
         return services;
     }
 
+    /// <summary>
+    /// The fixed window of a named policy for the caller (user, else remote IP): <see cref="ApiSecurityOptions.WindowSeconds"/>
+    /// long with the policy's permit limit and no queue.
+    /// </summary>
+    internal static RateLimitPartition<string> PolicyPartition(string policy, HttpContext context)
+    {
+        var security = context.RequestServices.GetRequiredService<IOptions<ApiSecurityOptions>>().Value;
+        var permitLimit = policy == ApiRateLimitPolicies.PublicRegistrationCode
+            ? security.PublicRegistrationCodePermitLimit
+            : security.AnonymousAuthPermitLimit;
+        return RateLimitPartition.GetFixedWindowLimiter(
+            GetPartitionKey(context),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = permitLimit,
+                QueueLimit = 0,
+                Window = TimeSpan.FromSeconds(security.WindowSeconds),
+            });
+    }
+
     public static IApplicationBuilder UseApiSecurity(this IApplicationBuilder app)
     {
+        var security = app.ApplicationServices.GetRequiredService<IOptions<ApiSecurityOptions>>().Value;
+        if (security.TrustForwardedHeaders)
+        {
+            // Only the hop the hosting proxy appended (ForwardLimit 1); earlier values come from the client and are ignored.
+            var forwarded = new ForwardedHeadersOptions
+            {
+                ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+                ForwardLimit = 1,
+            };
+            forwarded.KnownIPNetworks.Clear();
+            forwarded.KnownProxies.Clear();
+            app.UseForwardedHeaders(forwarded);
+        }
+
         app.UseMiddleware<IpBlockListMiddleware>();
         app.UseRateLimiter();
         return app;
@@ -79,7 +105,16 @@ internal sealed class ApiSecurityOptions
 
     public int AnonymousAuthPermitLimit { get; init; } = 20;
 
+    /// <summary>Public registration code requests per caller and window; each one may send an email.</summary>
+    public int PublicRegistrationCodePermitLimit { get; init; } = 10;
+
     public int WindowSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// Use the client address the hosting proxy appends to <c>X-Forwarded-For</c> (last hop only) for rate limits and the
+    /// block list. Enable only where every request reaches the API through that proxy.
+    /// </summary>
+    public bool TrustForwardedHeaders { get; init; }
 
     public string[] RejectedIpAddresses { get; init; } = [];
 }

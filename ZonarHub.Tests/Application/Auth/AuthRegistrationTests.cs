@@ -13,6 +13,7 @@ namespace ZonarHub.Tests.Application.Auth;
 public sealed class AuthRegistrationTests
 {
     private static readonly DateTime Now = new(2026, 5, 1, 4, 0, 0, DateTimeKind.Utc);
+    private const string TestMasterCode = "246810";
 
     [Fact]
     public async Task Register_WhenOrphanedTenantExists_ReusesItAndSucceeds()
@@ -32,7 +33,7 @@ public sealed class AuthRegistrationTests
                 "Password123!",
                 null,
                 null,
-                "451499"),
+                TestMasterCode),
             CancellationToken.None);
 
         // Assert: registration succeeds by reusing the orphaned tenant
@@ -59,7 +60,7 @@ public sealed class AuthRegistrationTests
                 "Password123!",
                 "+54 9 (11) 5555-1234",
                 null,
-                "451499"),
+                TestMasterCode),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -84,7 +85,7 @@ public sealed class AuthRegistrationTests
                 "Password123!",
                 "+54 9 11 5555-1234",
                 null,
-                "451499"),
+                TestMasterCode),
             CancellationToken.None);
 
         Assert.True(first.IsSuccess);
@@ -96,7 +97,7 @@ public sealed class AuthRegistrationTests
                 "Password123!",
                 "+5491155551234",
                 null,
-                "451499"),
+                TestMasterCode),
             CancellationToken.None);
 
         Assert.True(second.IsFailure);
@@ -107,10 +108,10 @@ public sealed class AuthRegistrationTests
     public async Task CheckCode_MasterBypass_IsAlwaysValid()
     {
         var cache = new MemoryCacheStore(TimeProvider.System);
-        var handler = new CheckVerificationCodeHandler(cache);
+        var handler = new CheckVerificationCodeHandler(cache, new StubMasterCode(TestMasterCode));
 
         var result = await handler.Handle(
-            new CheckVerificationCodeQuery("x@y.com", "451499"),
+            new CheckVerificationCodeQuery("x@y.com", TestMasterCode),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -124,7 +125,7 @@ public sealed class AuthRegistrationTests
         const string email = "cache@test.com";
         await cache.SetAsync($"verify:{email}", "123456", TimeSpan.FromMinutes(15));
 
-        var handler = new CheckVerificationCodeHandler(cache);
+        var handler = new CheckVerificationCodeHandler(cache, new StubMasterCode(null));
 
         var valid = await handler.Handle(new CheckVerificationCodeQuery(email, "123456"), CancellationToken.None);
         var invalid = await handler.Handle(new CheckVerificationCodeQuery(email, "000000"), CancellationToken.None);
@@ -135,9 +136,37 @@ public sealed class AuthRegistrationTests
         Assert.False(invalid.Value);
     }
 
+    [Fact]
+    public async Task Register_WhenMasterCodeIsDisabled_RejectsAnUncachedCode()
+    {
+        var h = new AuthTestHarness(Now, masterCode: null);
+
+        var result = await h.Register.Handle(
+            new RegisterCommand("Nicolas Morales", "nm@gmail.com", "Password123!", null, null, TestMasterCode),
+            CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal(UserErrors.InvalidOrExpiredCode.Code, result.Error.Code);
+        Assert.Null(await h.Users.GetByEmailAsync("nm@gmail.com", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CheckCode_WhenMasterCodeIsDisabled_RejectsAnUncachedCode()
+    {
+        var cache = new MemoryCacheStore(TimeProvider.System);
+        var handler = new CheckVerificationCodeHandler(cache, new StubMasterCode(null));
+
+        var result = await handler.Handle(
+            new CheckVerificationCodeQuery("x@y.com", "451499"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.False(result.Value);
+    }
+
     private sealed class AuthTestHarness
     {
-        public AuthTestHarness(DateTime nowUtc)
+        public AuthTestHarness(DateTime nowUtc, string? masterCode = TestMasterCode)
         {
             Users = new InMemoryUserRepository(new InMemoryUserStore());
             Tenants = new InMemoryTenantRepository(new InMemoryTenantStore());
@@ -149,12 +178,19 @@ public sealed class AuthRegistrationTests
             var uow = new InMemoryUnitOfWork();
             var clock = new TestClock(nowUtc);
 
-            Register = new RegisterHandler(Users, Tenants, hasher, jwt, cache, email, templates, uow, clock);
+            Register = new RegisterHandler(
+                Users, Tenants, hasher, jwt, cache, email, templates, uow, clock, new StubMasterCode(masterCode));
         }
 
         public InMemoryUserRepository Users { get; }
         public InMemoryTenantRepository Tenants { get; }
         public RegisterHandler Register { get; }
+    }
+
+    private sealed class StubMasterCode(string? enabledCode) : IDevelopmentMasterCode
+    {
+        public bool Matches(string? code) =>
+            enabledCode is not null && string.Equals(code?.Trim(), enabledCode, StringComparison.Ordinal);
     }
 
     private sealed class StubJwtTokenService : IJwtTokenService

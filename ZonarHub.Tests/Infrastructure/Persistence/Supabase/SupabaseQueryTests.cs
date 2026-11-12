@@ -21,6 +21,19 @@ public sealed class SupabaseQueryTests
     }
 
     [Fact]
+    public void QuotedContainsPattern_DropsLogicTreeSeparatorsAndQuotes_ThenEncodes()
+    {
+        Assert.Equal("ana%20p%40x.com", SupabaseQuery.QuotedContainsPattern(" ana, (p)@x.com\\\" *% "));
+    }
+
+    [Fact]
+    public void QuotedContainsPattern_ReturnsNullWhenNothingSearchableRemains()
+    {
+        Assert.Null(SupabaseQuery.QuotedContainsPattern(" ,()\"\\*% "));
+        Assert.Null(SupabaseQuery.QuotedContainsPattern(null));
+    }
+
+    [Fact]
     public void ContainsPattern_ReturnsNullWhenOnlyWildcardsRemain()
     {
         var value = SupabaseQuery.ContainsPattern(" *%% ");

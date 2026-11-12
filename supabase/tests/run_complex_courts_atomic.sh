@@ -407,6 +407,7 @@ SQL
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < supabase/tests/complex_courts_atomic.sql
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < supabase/tests/list_admin_users_by_organization.sql
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < supabase/tests/tournament_draw_revisions.sql
+docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres < supabase/tests/tournament_registrations.sql
 
 if [[ "${UNSAFE_COMPLEX_CONFLICT_TEST:-}" == 1 ]]; then
   # Mutation test: replace only the function in the disposable database, after

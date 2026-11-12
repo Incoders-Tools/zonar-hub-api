@@ -1,5 +1,4 @@
 using ZonarHub.Application.Abstractions;
-using ZonarHub.Application.Features.Auth;
 using ZonarHub.Application.Features.Auth.SendVerificationCode;
 using ZonarHub.Domain.Common;
 using ZonarHub.Domain.Tenants;
@@ -19,6 +18,7 @@ public sealed class RegisterHandler : IRequestHandler<RegisterCommand, Result<Au
     private readonly IEmailTemplateComposer _templates;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IClock _clock;
+    private readonly IDevelopmentMasterCode _masterCode;
 
     public RegisterHandler(
         IUserRepository users,
@@ -29,7 +29,8 @@ public sealed class RegisterHandler : IRequestHandler<RegisterCommand, Result<Au
         IEmailService email,
         IEmailTemplateComposer templates,
         IUnitOfWork unitOfWork,
-        IClock clock)
+        IClock clock,
+        IDevelopmentMasterCode masterCode)
     {
         _users = users;
         _tenants = tenants;
@@ -40,6 +41,7 @@ public sealed class RegisterHandler : IRequestHandler<RegisterCommand, Result<Au
         _templates = templates;
         _unitOfWork = unitOfWork;
         _clock = clock;
+        _masterCode = masterCode;
     }
 
     public async Task<Result<AuthResponse>> Handle(RegisterCommand request, CancellationToken cancellationToken)
@@ -48,7 +50,7 @@ public sealed class RegisterHandler : IRequestHandler<RegisterCommand, Result<Au
         var normalizedPhone = NormalizePhone(request.Phone);
         var now = _clock.UtcNow;
         var providedCode = request.VerificationCode.Trim();
-        var isMasterCode = AuthVerificationCodes.IsMasterBypass(providedCode);
+        var isMasterCode = _masterCode.Matches(providedCode);
 
         // Re-validate verification code
         var cacheKey = SendVerificationCodeHandler.CacheKey(emailLower);
@@ -111,7 +113,7 @@ public sealed class RegisterHandler : IRequestHandler<RegisterCommand, Result<Au
         var user = userResult.Value;
 
         // Mark email as verified (code was already validated)
-        var approvedCode = isMasterCode ? AuthVerificationCodes.MasterBypassCode : storedCode!;
+        var approvedCode = isMasterCode ? providedCode : storedCode!;
         user.SetVerificationCode(approvedCode, now.AddMinutes(1));
         user.VerifyEmail(approvedCode, now);
 

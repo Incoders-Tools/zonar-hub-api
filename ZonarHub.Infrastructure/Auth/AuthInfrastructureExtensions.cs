@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using ZonarHub.Application.Abstractions;
 using ZonarHub.Infrastructure.Email;
@@ -19,6 +20,8 @@ internal static class AuthInfrastructureExtensions
 
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
+        services.AddSingleton<IDevelopmentMasterCode>(sp =>
+            new DevelopmentMasterCode(sp.GetRequiredService<IHostEnvironment>(), configuration));
 
         services.AddOptions<EmailOptions>()
             .Bind(configuration.GetSection(EmailOptions.SectionName));
